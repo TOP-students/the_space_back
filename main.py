@@ -20,7 +20,7 @@ from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 
-load_dotenv()  # Загрузка .env
+load_dotenv()
 
 # настройки
 SECRET_KEY = os.getenv("SECRET_KEY", "your-fallback-secret-key-change-this")
@@ -28,7 +28,7 @@ ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
 
 # коннект с PostgreSQL (async)
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql+asyncpg://user:pass@localhost/chat_db")  # Требует asyncpg
+DATABASE_URL = os.getenv("DATABASE_URL", "postgresql+asyncpg://user:pass@localhost/chat_db")
 engine = create_async_engine(DATABASE_URL, echo=True)
 AsyncSessionLocal = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
@@ -320,7 +320,6 @@ async def connect(sid, environ, auth):
     active_users[user_id] = sid
     user_rooms[user_id] = set()
 
-    # Обновляем статус в DB
     async with AsyncSessionLocal() as session:
         result = await session.execute(select(User).filter(User.id == user_id))
         user = result.scalar_one_or_none()
@@ -345,7 +344,6 @@ async def disconnect(sid):
     del active_users[user_id]
     user_rooms.pop(user_id, None)
 
-    # Обновляем статус в DB
     async with AsyncSessionLocal() as session:
         result = await session.execute(select(User).filter(User.id == user_id))
         user = result.scalar_one_or_none()
@@ -407,7 +405,6 @@ async def handle_leave_room(sid, data):
     if not user_id:
         return
 
-    # Синхронизация с DB
     async with AsyncSessionLocal() as session:
         result = await session.execute(select(ChatParticipant).filter(ChatParticipant.chat_id == chat_id, ChatParticipant.user_id == user_id))
         participant = result.scalar_one_or_none()
@@ -438,7 +435,6 @@ async def handle_send_message(sid, data):
         await sio.emit("error", {"message": "chat_id и content обязательны"}, to=sid)
         return
 
-    # Проверка участия
     async with AsyncSessionLocal() as session:
         result = await session.execute(select(ChatParticipant).filter(ChatParticipant.chat_id == chat_id, ChatParticipant.user_id == user_id, ChatParticipant.is_active == True))
         participant = result.scalar_one_or_none()
@@ -726,7 +722,6 @@ async def send_message(chat_id: int, message: MessageCreate, request: Request, c
     await db.commit()
     await db.refresh(new_message)
 
-    # Emit через Socket.IO
     msg_data = {
         "chat_id": chat_id,
         "message": {
