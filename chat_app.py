@@ -1,6 +1,6 @@
-from fastapi import FastAPI, Depends, HTTPException, status, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Depends, HTTPException, status, WebSocket, WebSocketDisconnect, Query
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
-from sqlalchemy import create_engine, Column, Integer, String, Boolean, DateTime, ForeignKey, BigInteger, Text, JSON
+from sqlalchemy import create_engine, Column, Integer, String, Boolean, DateTime, ForeignKey, BigInteger, Text, JSON, Index
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship
 from sqlalchemy.sql import func
@@ -11,32 +11,35 @@ from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 import json
 import os
+from crud.user import UserRepository
+from crud.space import SpaceRepository
+from crud.message import MessageRepository
+from crud.role import RoleRepository
+from crud.ban import BanRepository
 
 # настройки
 SECRET_KEY = ""
-ALGORITHM = "HS256"
+ALGORITHM = ""
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
 
-# коннект с PostgreSQL
-DATABASE_URL = ""
+# подключение к PostgreSQL
+DATABASE_URL = "postgresql://user:password@localhost/chat_app"
 engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
-# хэширование паролей
+# хэширование и OAuth2
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-
-# OAuth2
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 
 app = FastAPI(title="Chat App API")
 
-# SQLAlchemy модели
+# Модели SQLAlchemy (+ индексы)
 class User(Base):
     __tablename__ = "users"
     id = Column(BigInteger, primary_key=True, index=True, autoincrement=True)
-    nickname = Column(String(50), unique=True, nullable=False)
-    email = Column(String(255), unique=True)
+    nickname = Column(String(50), unique=True, index=True, nullable=False)  # Индекс на nickname
+    email = Column(String(255), unique=True, index=True)
     password_hash = Column(String(255))
     avatar_url = Column(String(500))
     status = Column(String(10), default="offline")
@@ -55,13 +58,14 @@ class Chat(Base):
 class Message(Base):
     __tablename__ = "messages"
     id = Column(BigInteger, primary_key=True, index=True, autoincrement=True)
-    chat_id = Column(BigInteger, ForeignKey("chats.id", ondelete="CASCADE"), nullable=False)
-    user_id = Column(BigInteger, ForeignKey("users.id"), nullable=False)
-    content = Column(Text)
+    chat_id = Column(BigInteger, ForeignKey("chats.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id = Column(BigInteger, ForeignKey("users.id"), nullable=False, index=True)
+    content = Column(Text, index=True)  # индекс на content для поиска
     type = Column(String(20), default="text")
     attachment_id = Column(BigInteger, ForeignKey("attachments.id"))
     is_deleted = Column(Boolean, default=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+    __table_args__ = (Index('ix_messages_chat_created_at', 'chat_id', 'created_at'),)  # композитный индекс
 
 class Attachment(Base):
     __tablename__ = "attachments"
@@ -75,9 +79,9 @@ class Attachment(Base):
 class Role(Base):
     __tablename__ = "roles"
     id = Column(BigInteger, primary_key=True, index=True, autoincrement=True)
-    space_id = Column(BigInteger, ForeignKey("spaces.id", ondelete="CASCADE"), nullable=False)
+    space_id = Column(BigInteger, ForeignKey("spaces.id", ondelete="CASCADE"), nullable=False, index=True)
     name = Column(String(50), nullable=False)
-    permissions = Column(JSON)  # JSON для списка прав, типа ["kick", "ban"]
+    permissions = Column(JSON)
     color = Column(String(7))
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
@@ -86,36 +90,39 @@ class Space(Base):
     id = Column(BigInteger, primary_key=True, index=True, autoincrement=True)
     name = Column(String(100), nullable=False)
     description = Column(Text)
-    admin_id = Column(BigInteger, ForeignKey("users.id"), nullable=False)
+    admin_id = Column(BigInteger, ForeignKey("users.id"), nullable=False, index=True)
     background_url = Column(String(500))
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 class ChatParticipant(Base):
     __tablename__ = "chat_participants"
     id = Column(BigInteger, primary_key=True, index=True, autoincrement=True)
-    chat_id = Column(BigInteger, ForeignKey("chats.id", ondelete="CASCADE"), nullable=False)
-    user_id = Column(BigInteger, ForeignKey("users.id"), nullable=False)
+    chat_id = Column(BigInteger, ForeignKey("chats.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id = Column(BigInteger, ForeignKey("users.id"), nullable=False, index=True)
     joined_at = Column(DateTime(timezone=True), server_default=func.now())
     is_active = Column(Boolean, default=True)
+    __table_args__ = (Index('ix_participants_chat_user', 'chat_id', 'user_id'),)
 
 class Ban(Base):
     __tablename__ = "bans"
     id = Column(BigInteger, primary_key=True, index=True, autoincrement=True)
-    user_id = Column(BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     banned_by = Column(BigInteger, ForeignKey("users.id"), nullable=False)
-    space_id = Column(BigInteger, ForeignKey("spaces.id"))
+    space_id = Column(BigInteger, ForeignKey("spaces.id"), index=True)
     reason = Column(Text)
     until = Column(DateTime(timezone=True))
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+    __table_args__ = (Index('ix_bans_user_space', 'user_id', 'space_id'),)
 
 class UserRole(Base):
     __tablename__ = "user_roles"
     id = Column(BigInteger, primary_key=True, index=True, autoincrement=True)
-    user_id = Column(BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
-    role_id = Column(BigInteger, ForeignKey("roles.id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    role_id = Column(BigInteger, ForeignKey("roles.id", ondelete="CASCADE"), nullable=False, index=True)
     assigned_at = Column(DateTime(timezone=True), server_default=func.now())
+    __table_args__ = (Index('ix_user_roles_user_role', 'user_id', 'role_id'),)
 
-# Pydantic модели
+# Pydantic модели (для пагинации и поиска)
 class UserCreate(BaseModel):
     nickname: str
     email: Optional[str]
@@ -135,6 +142,9 @@ class MessageCreate(BaseModel):
     content: str
     type: Optional[str] = "text"
     attachment_id: Optional[int] = None
+
+class MessageUpdate(BaseModel):
+    content: str
 
 class MessageOut(BaseModel):
     id: int
@@ -171,13 +181,28 @@ class BanCreate(BaseModel):
     reason: Optional[str]
     until: Optional[datetime]
 
-# зависимости
+# зависимости (для CRUD)
 def get_db():
     db = SessionLocal()
     try:
         yield db
     finally:
         db.close()
+
+def get_user_repo(db=Depends(get_db)):
+    return UserRepository(db)
+
+def get_space_repo(db=Depends(get_db)):
+    return SpaceRepository(db)
+
+def get_message_repo(db=Depends(get_db)):
+    return MessageRepository(db)
+
+def get_role_repo(db=Depends(get_db)):
+    return RoleRepository(db)
+
+def get_ban_repo(db=Depends(get_db)):
+    return BanRepository(db)
 
 async def get_current_user(token: str = Depends(oauth2_scheme), db=Depends(get_db)):
     credentials_exception = HTTPException(
@@ -197,19 +222,12 @@ async def get_current_user(token: str = Depends(oauth2_scheme), db=Depends(get_d
         raise credentials_exception
     return user
 
-# функция проверки прав
-def check_permissions(db, user_id: int, space_id: int, required_permission: str) -> bool:
-    user_role = db.query(UserRole).join(Role).filter(
-        UserRole.user_id == user_id, Role.space_id == space_id
-    ).first()
-    if not user_role:
-        return False
-    permissions = user_role.role.permissions or []
-    if isinstance(permissions, str):
-        permissions = json.loads(permissions)
-    return required_permission in permissions or "admin" in permissions  # админ имеет все права
+# функция проверки прав (под CRUD)
+def check_permissions(db, user_id: int, space_id: int, required_permission: str, role_repo: RoleRepository) -> bool:
+    permissions = role_repo.get_permissions(user_id, space_id)
+    return required_permission in permissions or "admin" in permissions
 
-# утилиты (хэширование и JWT)
+# утилиты
 def verify_password(plain_password, hashed_password):
     return pwd_context.verify(plain_password, hashed_password)
 
@@ -226,7 +244,7 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
 
-# WebSocket менеджер для чатов
+# WebSocket менеджер
 class ConnectionManager:
     def __init__(self):
         self.active_connections: dict[int, List[WebSocket]] = {}
@@ -246,26 +264,19 @@ class ConnectionManager:
 
 manager = ConnectionManager()
 
-# эндпоинты
-
-# регистрация (проверка email)
+# эндпоинты (под CRUD)
 @app.post("/register", response_model=UserOut)
-def register(user: UserCreate, db=Depends(get_db)):
-    if db.query(User).filter(User.nickname == user.nickname).first():
+def register(user: UserCreate, user_repo: UserRepository = Depends(get_user_repo)):
+    if user_repo.get_by_nickname(user.nickname):
         raise HTTPException(status_code=400, detail="Никнейм уже занят")
-    if user.email and db.query(User).filter(User.email == user.email).first():
+    if user.email and user_repo.get_by_email(user.email):
         raise HTTPException(status_code=400, detail="Email уже используется")
-    hashed_password = get_password_hash(user.password)
-    new_user = User(nickname=user.nickname, email=user.email, password_hash=hashed_password)
-    db.add(new_user)
-    db.commit()
-    db.refresh(new_user)
+    new_user = user_repo.create(user.nickname, user.email or None, user.password)
     return new_user
 
-# вход
 @app.post("/token", response_model=Token)
-def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends(), db=Depends(get_db)):
-    user = db.query(User).filter(User.nickname == form_data.username).first()
+def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends(), user_repo: UserRepository = Depends(get_user_repo)):
+    user = user_repo.get_by_nickname(form_data.username)
     if not user or not verify_password(form_data.password, user.password_hash):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -278,197 +289,122 @@ def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends(), db=
     )
     return {"access_token": access_token, "token_type": "bearer"}
 
-# создание пространства (автоматическое создание чата, добавление админа как участника)
 @app.post("/spaces", response_model=SpaceOut)
-def create_space(space: SpaceCreate, current_user: User = Depends(get_current_user), db=Depends(get_db)):
-    new_space = Space(name=space.name, description=space.description, admin_id=current_user.id, background_url=space.background_url)
-    db.add(new_space)
-    db.commit()
-    db.refresh(new_space)
-    
-    # создаём чат для пространства
-    chat = Chat(type="group", user1_id=new_space.id, user2_id=current_user.id)
-    db.add(chat)
-    db.commit()
-    db.refresh(chat)
-    
-    # добавляем админа как участника чата
-    participant = ChatParticipant(chat_id=chat.id, user_id=current_user.id, is_active=True)
-    db.add(participant)
-    db.commit()
-    
-    new_space.chat_id = chat.id
+def create_space(space: SpaceCreate, current_user: User = Depends(get_current_user), space_repo: SpaceRepository = Depends(get_space_repo)):
+    new_space = space_repo.create(space.name, space.description or None, current_user.id, space.background_url or None)
     return new_space
 
-# вход в пространство (добавление в chat_participants, проверка бана)
 @app.post("/spaces/{space_id}/join")
-def join_space(space_id: int, current_user: User = Depends(get_current_user), db=Depends(get_db)):
-    space = db.query(Space).filter(Space.id == space_id).first()
-    if not space:
-        raise HTTPException(status_code=404, detail="Пространство не найдено")
-    
-    # проверка бана
-    active_ban = db.query(Ban).filter(
-        Ban.user_id == current_user.id, 
-        Ban.space_id == space_id,
-        Ban.until > datetime.now(timezone.utc) | Ban.until.is_(None)
-    ).first()
-    if active_ban:
+def join_space(space_id: int, current_user: User = Depends(get_current_user), space_repo: SpaceRepository = Depends(get_space_repo), ban_repo: BanRepository = Depends(get_ban_repo)):
+    if ban_repo.is_active(current_user.id, space_id):
         raise HTTPException(status_code=403, detail="Вы забанены в этом пространстве")
-    
-    # получаем чат пространства
-    chat = db.query(Chat).filter(Chat.user1_id == space_id).first()
-    if not chat:
-        raise HTTPException(status_code=404, detail="Чат для пространства не найден")
-    
-    # проверяем, не участник ли уже
-    existing = db.query(ChatParticipant).filter(ChatParticipant.chat_id == chat.id, ChatParticipant.user_id == current_user.id).first()
-    if existing and existing.is_active:
-        raise HTTPException(status_code=400, detail="Вы уже участник")
-    
-    if existing:
-        existing.is_active = True
-    else:
-        new_participant = ChatParticipant(chat_id=chat.id, user_id=current_user.id, is_active=True)
-        db.add(new_participant)
-    
-    db.commit()
+    space_repo.join(space_id, current_user.id)
     return {"message": "Успешно присоединены к пространству"}
 
-# получение списка участников пространства (через chat_participants + роли)
 @app.get("/spaces/{space_id}/participants", response_model=List[UserOut])
-def get_participants(space_id: int, current_user: User = Depends(get_current_user), db=Depends(get_db)):
-    space = db.query(Space).filter(Space.id == space_id).first()
-    if not space:
-        raise HTTPException(status_code=404, detail="Пространство не найдено")
-    
-    chat = db.query(Chat).filter(Chat.user1_id == space_id).first()
-    if not chat:
-        return []
-    
-    participants = db.query(User).join(ChatParticipant).filter(ChatParticipant.chat_id == chat.id, ChatParticipant.is_active == True).all()
+def get_participants(space_id: int, current_user: User = Depends(get_current_user), space_repo: SpaceRepository = Depends(get_space_repo)):
+    participants = space_repo.get_participants(space_id)
     return participants
 
-# кик (проверка прав для кика)
 @app.delete("/spaces/{space_id}/kick/{user_id}")
-def kick_user(space_id: int, user_id: int, current_user: User = Depends(get_current_user), db=Depends(get_db)):
-    if not check_permissions(db, current_user.id, space_id, "kick"):
+def kick_user(space_id: int, user_id: int, current_user: User = Depends(get_current_user), space_repo: SpaceRepository = Depends(get_space_repo), role_repo: RoleRepository = Depends(get_role_repo)):
+    if not check_permissions(None, current_user.id, space_id, "kick", role_repo):  # db=None, т.к. используем repo
         raise HTTPException(status_code=403, detail="У вас нет прав на кик")
-    
-    space = db.query(Space).filter(Space.id == space_id).first()
-    if not space:
-        raise HTTPException(status_code=404, detail="Пространство не найдено")
-    
-    chat = db.query(Chat).filter(Chat.user1_id == space_id).first()
-    if not chat:
-        raise HTTPException(status_code=404, detail="Чат не найден")
-    
-    participant = db.query(ChatParticipant).filter(ChatParticipant.chat_id == chat.id, ChatParticipant.user_id == user_id).first()
-    if not participant:
-        raise HTTPException(status_code=404, detail="Пользователь не найден в пространстве")
-    
-    participant.is_active = False
-    db.commit()
+    space_repo.kick(space_id, user_id)
     return {"message": "Пользователь успешно кикнут"}
 
-# бан (проверка прав для бана)
 @app.post("/spaces/{space_id}/ban/{user_id}")
-def ban_user(space_id: int, user_id: int, ban_data: BanCreate, current_user: User = Depends(get_current_user), db=Depends(get_db)):
-    if not check_permissions(db, current_user.id, space_id, "ban"):
+def ban_user(space_id: int, user_id: int, ban_data: BanCreate, current_user: User = Depends(get_current_user), ban_repo: BanRepository = Depends(get_ban_repo), role_repo: RoleRepository = Depends(get_role_repo)):
+    if not check_permissions(None, current_user.id, space_id, "ban", role_repo):
         raise HTTPException(status_code=403, detail="У вас нет прав на бан")
-    
-    space = db.query(Space).filter(Space.id == space_id).first()
-    if not space:
-        raise HTTPException(status_code=404, detail="Пространство не найдено")
-    
-    new_ban = Ban(user_id=user_id, banned_by=current_user.id, space_id=space_id, reason=ban_data.reason, until=ban_data.until)
-    db.add(new_ban)
-    
-    # деактивируем участие
-    chat = db.query(Chat).filter(Chat.user1_id == space_id).first()
-    if chat:
-        participant = db.query(ChatParticipant).filter(ChatParticipant.chat_id == chat.id, ChatParticipant.user_id == user_id).first()
-        if participant:
-            participant.is_active = False
-    
-    db.commit()
+    ban_repo.create(user_id, current_user.id, space_id, ban_data.reason or None, ban_data.until)
+    # деактивация участия через space_repo.kick
+    space_repo = SpaceRepository(ban_repo.db)  # временный инстанс для kick
+    space_repo.kick(space_id, user_id)
     return {"message": "Пользователь успешно забанен"}
 
-# назначение роли (проверка прав, permissions как список)
 @app.post("/spaces/{space_id}/assign-role/{user_id}/{role_id}")
-def assign_role(space_id: int, user_id: int, role_id: int, current_user: User = Depends(get_current_user), db=Depends(get_db)):
-    if not check_permissions(db, current_user.id, space_id, "assign_role"):
+def assign_role(space_id: int, user_id: int, role_id: int, current_user: User = Depends(get_current_user), role_repo: RoleRepository = Depends(get_role_repo)):
+    if not check_permissions(None, current_user.id, space_id, "assign_role", role_repo):
         raise HTTPException(status_code=403, detail="У вас нет прав на назначение ролей")
-    
-    space = db.query(Space).filter(Space.id == space_id).first()
-    if not space:
-        raise HTTPException(status_code=404, detail="Пространство не найдено")
-    
-    role = db.query(Role).filter(Role.id == role_id, Role.space_id == space_id).first()
-    if not role:
-        raise HTTPException(status_code=404, detail="Роль не найдена")
-    
-    existing = db.query(UserRole).filter(UserRole.user_id == user_id, UserRole.role_id == role_id).first()
-    if existing:
-        raise HTTPException(status_code=400, detail="Роль уже назначена")
-    
-    new_user_role = UserRole(user_id=user_id, role_id=role_id)
-    db.add(new_user_role)
-    db.commit()
+    role_repo.assign_to_user(user_id, role_id)
     return {"message": "Роль успешно назначена"}
 
-# ++ отправка сообщения
+# сообщения (с пагинацией)
 @app.post("/chats/{chat_id}/messages", response_model=MessageOut)
-def send_message(chat_id: int, message: MessageCreate, current_user: User = Depends(get_current_user), db=Depends(get_db)):
-    chat = db.query(Chat).filter(Chat.id == chat_id).first()
-    if not chat:
-        raise HTTPException(status_code=404, detail="Чат не найден")
-    
-    # проверка участия
-    participant = db.query(ChatParticipant).filter(ChatParticipant.chat_id == chat_id, ChatParticipant.user_id == current_user.id, ChatParticipant.is_active == True).first()
+def send_message(chat_id: int, message: MessageCreate, current_user: User = Depends(get_current_user), message_repo: MessageRepository = Depends(get_message_repo)):
+    # проверка участия (через db)
+    participant = message_repo.db.query(ChatParticipant).filter(
+        ChatParticipant.chat_id == chat_id, ChatParticipant.user_id == current_user.id, ChatParticipant.is_active == True
+    ).first()
     if not participant:
         raise HTTPException(status_code=403, detail="Вы не участник чата")
-    
-    new_message = Message(chat_id=chat_id, user_id=current_user.id, content=message.content, type=message.type, attachment_id=message.attachment_id)
-    db.add(new_message)
-    db.commit()
-    db.refresh(new_message)
-    
-    # уведомление через WebSocket
+    new_message = message_repo.create(chat_id, current_user.id, message.content, message.type, message.attachment_id)
     manager.broadcast(json.dumps({"type": "new_message", "message": new_message.__dict__}), chat_id)
-    
     return new_message
 
-# ++ получение сообщений
 @app.get("/chats/{chat_id}/messages", response_model=List[MessageOut])
-def get_messages(chat_id: int, limit: int = 50, current_user: User = Depends(get_current_user), db=Depends(get_db)):
-    chat = db.query(Chat).filter(Chat.id == chat_id).first()
-    if not chat:
-        raise HTTPException(status_code=404, detail="Чат не найден")
-    
-    participant = db.query(ChatParticipant).filter(ChatParticipant.chat_id == chat_id, ChatParticipant.user_id == current_user.id, ChatParticipant.is_active == True).first()
+def get_messages(
+    chat_id: int, 
+    limit: int = Query(50, ge=1, le=100), 
+    offset: int = Query(0, ge=0), 
+    current_user: User = Depends(get_current_user), 
+    message_repo: MessageRepository = Depends(get_message_repo)
+):
+    # проверка участия
+    participant = message_repo.db.query(ChatParticipant).filter(
+        ChatParticipant.chat_id == chat_id, ChatParticipant.user_id == current_user.id, ChatParticipant.is_active == True
+    ).first()
     if not participant:
         raise HTTPException(status_code=403, detail="Вы не участник чата")
-    
-    messages = db.query(Message).filter(Message.chat_id == chat_id, Message.is_deleted == False).order_by(Message.created_at.desc()).limit(limit).all()
-    return messages[::-1]  # Реверс для хронологического порядка
+    messages = message_repo.get_by_chat(chat_id, limit, offset)
+    return messages
 
-# ++ WebSocket для чата
+# поиск по сообщениям
+@app.get("/chats/{chat_id}/messages/search", response_model=List[MessageOut])
+def search_messages(
+    chat_id: int, 
+    q: str = Query(..., min_length=1), 
+    limit: int = Query(50, ge=1, le=100), 
+    offset: int = Query(0, ge=0), 
+    current_user: User = Depends(get_current_user), 
+    message_repo: MessageRepository = Depends(get_message_repo)
+):
+    # проверка участия
+    participant = message_repo.db.query(ChatParticipant).filter(
+        ChatParticipant.chat_id == chat_id, ChatParticipant.user_id == current_user.id, ChatParticipant.is_active == True
+    ).first()
+    if not participant:
+        raise HTTPException(status_code=403, detail="Вы не участник чата")
+    messages = message_repo.search_by_chat(chat_id, q, limit, offset)
+    return messages
+
+# редактирование сообщений
+@app.patch("/chats/{chat_id}/messages/{message_id}", response_model=MessageOut)
+def update_message(chat_id: int, message_id: int, update_data: MessageUpdate, current_user: User = Depends(get_current_user), message_repo: MessageRepository = Depends(get_message_repo)):
+    # проверка, что сообщение в чате и принадлежит пользователю
+    message = message_repo.get_by_id(message_id)
+    if not message or message.chat_id != chat_id or message.user_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Сообщение не найдено или недоступно")
+    updated_message = message_repo.update(message_id, update_data.content, current_user.id)
+    if not updated_message:
+        raise HTTPException(status_code=400, detail="Не удалось обновить сообщение")
+    return updated_message
+
+# WebSocket
 @app.websocket("/ws/{chat_id}")
 async def websocket_endpoint(websocket: WebSocket, chat_id: int, current_user: User = Depends(get_current_user), db=Depends(get_db)):
     participant = db.query(ChatParticipant).filter(ChatParticipant.chat_id == chat_id, ChatParticipant.user_id == current_user.id, ChatParticipant.is_active == True).first()
     if not participant:
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         return
-    
     await manager.connect(websocket, chat_id)
     try:
         while True:
             data = await websocket.receive_text()
-            # можно обработать входящие сообщения, для простоты просто broadcast
             await manager.broadcast(f"User {current_user.nickname}: {data}", chat_id)
     except WebSocketDisconnect:
         manager.disconnect(websocket, chat_id)
 
-# создание таблиц
+# создание таблиц с индексами
 Base.metadata.create_all(bind=engine)
