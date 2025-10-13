@@ -9,3 +9,19 @@ venv/
 *.egg-info/
 .pytest_cache/
 *.log
+
+# Документация и рабочие файлы
+docs/
+
+# Временные файлы
+main_old.py
+server*.log
+test_run.log
+
+# IDE и редакторы
+.claude/
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
