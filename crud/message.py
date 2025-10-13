@@ -1,6 +1,6 @@
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, or_, func, text
-from ..main import Message, User  # импорт из main.py
+from ..models.base import Message, User
 
 class MessageRepository:
     def __init__(self, db: Session):

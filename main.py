@@ -1,13 +1,58 @@
-from fastapi import FastAPI
-import socketio
+from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
+
 from utils.websocket_manager import WebSocketManager
 from utils.message_handler import MessageHandler
 from utils.auth_middleware import AuthMiddleware
+
 from datetime import datetime
+import socketio
 import uvicorn
 
+from models.base import Base, SessionLocal, engine
+from routers import auth, spaces, messages
+from crud.user import UserRepository
+from crud.space import SpaceRepository
+from crud.message import MessageRepository
+from crud.role import RoleRepository
+from crud.ban import BanRepository
+
 app = FastAPI()
+
+# подключение зависимостей
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+def get_user_repo(db=Depends(get_db)):
+    return UserRepository(db)
+
+def get_space_repo(db=Depends(get_db)):
+    return SpaceRepository(db)
+
+def get_message_repo(db=Depends(get_db)):
+    return MessageRepository(db)
+
+def get_role_repo(db=Depends(get_db)):
+    return RoleRepository(db)
+
+def get_ban_repo(db=Depends(get_db)):
+    return BanRepository(db)
+
+# подключение роутеров
+app.include_router(auth.router, prefix="/auth", tags=["auth"])
+app.include_router(spaces.router, prefix="/spaces", tags=["spaces"])
+app.include_router(messages.router, prefix="/messages", tags=["messages"])
+
+# WebSocket менеджер (глобальный)
+from routers.messages import manager  # импорт из messages.py
+
+# создание таблиц
+Base.metadata.create_all(bind=engine)
+
 
 app.add_middleware(
     CORSMiddleware,

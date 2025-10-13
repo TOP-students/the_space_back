@@ -1,6 +1,6 @@
 from sqlalchemy.orm import Session
 from datetime import datetime, timezone
-from ..main import Ban
+from ..models.base import Ban
 
 class BanRepository:
     def __init__(self, db: Session):

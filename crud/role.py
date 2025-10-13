@@ -1,6 +1,6 @@
 from sqlalchemy.orm import Session
-from ..main import Role, UserRole  # импорт из main.py
 import json
+from ..models.base import Role, UserRole
 
 class RoleRepository:
     def __init__(self, db: Session):

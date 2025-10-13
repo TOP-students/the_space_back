@@ -1,5 +1,5 @@
 from sqlalchemy.orm import Session
-from ..main import Space, Chat, ChatParticipant
+from ..models.base import Space, Chat, ChatParticipant
 
 class SpaceRepository:
     def __init__(self, db: Session):
