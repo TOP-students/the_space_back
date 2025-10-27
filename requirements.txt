@@ -7,7 +7,7 @@ cffi==2.0.0
 click==8.3.0
 cloudinary==1.44.1
 colorama==0.4.6
-cryptography==46.0.1
+cryptography==46.0.1\
 ecdsa==0.19.1
 fastapi==0.117.1
 greenlet==3.2.4
@@ -19,6 +19,7 @@ pyasn1==0.6.1
 pycparser==2.23
 pydantic==2.11.9
 pydantic_core==2.33.2
+python-dotenv
 python-engineio==4.12.2
 python-jose==3.5.0
 python-multipart==0.0.20

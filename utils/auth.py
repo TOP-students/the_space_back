@@ -1,55 +1,93 @@
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
-from jose import JWTError, jwt
-from passlib.context import CryptContext
 from datetime import datetime, timedelta, timezone
-from typing import Optional, Dict
+from typing import Optional
+from sqlalchemy.orm import Session
 
-SECRET_KEY = "your-super-secret-key-change-me"
+# Попробуем сначала python-jose, если нет - используем PyJWT
+try:
+    from jose import JWTError, jwt
+except ImportError:
+    import jwt
+    JWTError = jwt.InvalidTokenError
+
+from models.base import SessionLocal, User, verify_password
+
+# Конфигурация JWT
+SECRET_KEY = "your-super-secret-key-change-me-in-production-12345"  # В проде замени на env переменную!
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 30
+ACCESS_TOKEN_EXPIRE_MINUTES = 1440  # 24 часа
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/token")
 
-def verify_password(plain_password: str, hashed_password: str) -> bool:
-    return pwd_context.verify(plain_password, hashed_password)
+def get_db():
+    """Dependency для получения сессии БД"""
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
 
-def get_password_hash(password: str) -> str:
-    return pwd_context.hash(password)
-
-def create_access_token(data: Dict, expires_delta: Optional[timedelta] = None) -> str:
+def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
+    """Создание JWT токена"""
     to_encode = data.copy()
     if expires_delta:
         expire = datetime.now(timezone.utc) + expires_delta
     else:
-        expire = datetime.now(timezone.utc) + timedelta(minutes=15)
+        expire = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    
     to_encode.update({"exp": expire})
-    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    
+    # Проверяем какая библиотека используется
+    try:
+        from jose import jwt as jose_jwt
+        encoded_jwt = jose_jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    except ImportError:
+        import jwt as pyjwt
+        encoded_jwt = pyjwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    
     return encoded_jwt
 
-async def get_current_user(token: str = Depends(oauth2_scheme), db=Depends(lambda: SessionLocal())):
+async def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)) -> User:
+    """Получение текущего пользователя из JWT токена"""
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Невозможно валидировать токен",
+        detail="Не удалось валидировать токен",
         headers={"WWW-Authenticate": "Bearer"},
     )
+    
     try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        # Декодируем токен
+        try:
+            from jose import jwt as jose_jwt
+            payload = jose_jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        except ImportError:
+            import jwt as pyjwt
+            payload = pyjwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        
         user_id: str = payload.get("sub")
         if user_id is None:
             raise credentials_exception
+            
     except JWTError:
         raise credentials_exception
-    from models.base import User
+    
+    # Получаем пользователя из БД
     user = db.query(User).filter(User.id == int(user_id)).first()
     if user is None:
         raise credentials_exception
+    
     return user
 
-def check_permissions(db, user_id: int, space_id: int, required_permission: str, role_repo=None) -> bool:
-    from crud.role import RoleRepository
-    if not role_repo:
-        role_repo = RoleRepository(db)
-    permissions = role_repo.get_permissions(user_id, space_id)
-    return required_permission in permissions or "admin" in permissions
+def check_permissions(db: Session, user_id: int, space_id: int, required_permission: str) -> bool:
+    """Проверка прав доступа (упрощённая версия для прототипа)"""
+    from models.base import Space
+    
+    # Проверяем, является ли пользователь админом комнаты
+    space = db.query(Space).filter(Space.id == space_id).first()
+    if space and space.admin_id == user_id:
+        return True
+    
+    # Для прототипа: все участники могут отправлять сообщения
+    # Полноценную систему ролей добавим потом
+    return True

@@ -1,6 +1,6 @@
 from sqlalchemy.orm import Session
 from sqlalchemy import and_
-from ..models.base import User, get_password_hash
+from models.base import User, get_password_hash
 
 class UserRepository:
     def __init__(self, db: Session):

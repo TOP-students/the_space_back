@@ -1,13 +1,34 @@
 from sqlalchemy import create_engine, Column, String, Boolean, DateTime, ForeignKey, BigInteger, Text, JSON, Index
 from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker
 from sqlalchemy.sql import func
-from sqlalchemy.orm import Session
+import bcrypt
 from datetime import datetime, timezone
+import os
+from dotenv import load_dotenv
+load_dotenv()
 
-DATABASE_URL = ""
+# строка подключения к развёрнутой бд
+DATABASE_URL = os.getenv("DATABASE_URL")
+
 engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
+
+# хеширование паролей через bcrypt напрямую
+def get_password_hash(password: str) -> str:
+    """Хеширует пароль"""
+    password_bytes = password.encode('utf-8')
+    salt = bcrypt.gensalt()
+    hashed = bcrypt.hashpw(password_bytes, salt)
+    return hashed.decode('utf-8')
+
+def verify_password(plain_password: str, hashed_password: str) -> bool:
+    """Проверяет пароль"""
+    password_bytes = plain_password.encode('utf-8')
+    hashed_bytes = hashed_password.encode('utf-8')
+    return bcrypt.checkpw(password_bytes, hashed_bytes)
+
 
 class User(Base):
     __tablename__ = "users"
@@ -27,6 +48,7 @@ class Chat(Base):
     type = Column(String(20), default="private")
     user1_id = Column(BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     user2_id = Column(BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    space_id = Column(BigInteger, ForeignKey("spaces.id", ondelete="CASCADE"))
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 class Message(Base):

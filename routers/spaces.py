@@ -1,55 +1,177 @@
 from fastapi import APIRouter, Depends, HTTPException
 from typing import List
+from sqlalchemy.orm import Session
 
 from schemas.space import SpaceCreate, SpaceOut, BanCreate
 from utils.auth import get_current_user, check_permissions, get_db
-from models.base import User
+from models.base import User, Space
 from crud.space import SpaceRepository
 from crud.ban import BanRepository
 from crud.role import RoleRepository
-from fastapi import HTTPException
 
 router = APIRouter()
 
 @router.post("/", response_model=SpaceOut)
-def create_space(space: SpaceCreate, current_user: User = Depends(get_current_user), space_repo: SpaceRepository = Depends(lambda: SpaceRepository(get_db()))):
-    new_space = space_repo.create(space.name, space.description or None, current_user.id, space.background_url or None)
+async def create_space(
+    space: SpaceCreate, 
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Создание новой комнаты"""
+    space_repo = SpaceRepository(db)
+    new_space = space_repo.create(
+        space.name, 
+        space.description or None, 
+        current_user.id, 
+        space.background_url or None
+    )
     return new_space
 
+@router.get("/")
+async def get_all_spaces(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Получить список всех комнат с chat_id"""
+    from models.base import Chat
+    
+    spaces = db.query(Space).all()
+    
+    result = []
+    for space in spaces:
+        chat = db.query(Chat).filter(Chat.space_id == space.id).first()
+        
+        result.append({
+            "id": space.id,
+            "name": space.name,
+            "description": space.description,
+            "admin_id": space.admin_id,
+            "chat_id": chat.id if chat else None
+        })
+    
+    return result
+
+@router.get("/{space_id}", response_model=SpaceOut)
+async def get_space(
+    space_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Получить информацию о комнате"""
+    space_repo = SpaceRepository(db)
+    space = space_repo.get_by_id(space_id)
+    if not space:
+        raise HTTPException(status_code=404, detail="Комната не найдена")
+    return space
+
 @router.post("/{space_id}/join")
-def join_space(space_id: int, current_user: User = Depends(get_current_user), space_repo: SpaceRepository = Depends(lambda: SpaceRepository(get_db())), ban_repo: BanRepository = Depends(lambda: BanRepository(get_db()))):
+async def join_space(
+    space_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Присоединиться к комнате"""
+    space_repo = SpaceRepository(db)
+    ban_repo = BanRepository(db)
+    
+    # Проверка на бан
     if ban_repo.is_active(current_user.id, space_id):
         raise HTTPException(status_code=403, detail="Вы забанены в этом пространстве")
-    space_repo.join(space_id, current_user.id)
-    return {"message": "Успешно присоединены к пространству"}
+    
+    # Присоединение к комнате
+    result = space_repo.join(space_id, current_user.id)
+    if not result:
+        raise HTTPException(status_code=404, detail="Комната не найдена")
+    
+    return {"message": "Вы успешно присоединились к комнате"}
 
-@router.get("/{space_id}/participants", response_model=List[SpaceOut])  # Адаптируйте под UserOut если нужно
-def get_participants(space_id: int, current_user: User = Depends(get_current_user), space_repo: SpaceRepository = Depends(lambda: SpaceRepository(get_db()))):
+@router.get("/{space_id}/participants")
+async def get_participants(
+    space_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Получить участников комнаты"""
+    space_repo = SpaceRepository(db)
     participants = space_repo.get_participants(space_id)
-    return participants
+    
+    return {
+        "space_id": space_id,
+        "participants": [
+            {
+                "id": user.id,
+                "nickname": user.nickname,
+                "status": user.status
+            } for user in participants
+        ]
+    }
 
 @router.delete("/{space_id}/kick/{user_id}")
-def kick_user(space_id: int, user_id: int, current_user: User = Depends(get_current_user), space_repo: SpaceRepository = Depends(lambda: SpaceRepository(get_db())), role_repo: RoleRepository = Depends(lambda: RoleRepository(get_db()))):
-    db = get_db()
-    if not check_permissions(db, current_user.id, space_id, "kick", role_repo):
-        raise HTTPException(status_code=403, detail="У вас нет прав на кик")
+async def kick_user(
+    space_id: int,
+    user_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Исключить пользователя из комнаты"""
+    space_repo = SpaceRepository(db)
+    role_repo = RoleRepository(db)
+    
+    # Проверка прав (упрощённая - только админ может кикать)
+    space = space_repo.get_by_id(space_id)
+    if not space or space.admin_id != current_user.id:
+        raise HTTPException(status_code=403, detail="У вас нет прав на это действие")
+    
     space_repo.kick(space_id, user_id)
-    return {"message": "Пользователь успешно кикнут"}
+    return {"message": "Пользователь исключён из комнаты"}
 
 @router.post("/{space_id}/ban/{user_id}")
-def ban_user(space_id: int, user_id: int, ban_data: BanCreate, current_user: User = Depends(get_current_user), ban_repo: BanRepository = Depends(lambda: BanRepository(get_db())), role_repo: RoleRepository = Depends(lambda: RoleRepository(get_db()))):
-    db = get_db()
-    if not check_permissions(db, current_user.id, space_id, "ban", role_repo):
-        raise HTTPException(status_code=403, detail="У вас нет прав на бан")
-    ban_repo.create(user_id, current_user.id, space_id, ban_data.reason or None, ban_data.until)
+async def ban_user(
+    space_id: int,
+    user_id: int,
+    ban_data: BanCreate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Забанить пользователя в комнате"""
     space_repo = SpaceRepository(db)
+    ban_repo = BanRepository(db)
+    
+    # Проверка прав (только админ)
+    space = space_repo.get_by_id(space_id)
+    if not space or space.admin_id != current_user.id:
+        raise HTTPException(status_code=403, detail="У вас нет прав на бан")
+    
+    # Создание бана
+    ban_repo.create(
+        user_id, 
+        current_user.id, 
+        space_id, 
+        ban_data.reason or None, 
+        ban_data.until
+    )
+    
+    # Кик пользователя
     space_repo.kick(space_id, user_id)
-    return {"message": "Пользователь успешно забанен"}
+    
+    return {"message": "Пользователь забанен"}
 
 @router.post("/{space_id}/assign-role/{user_id}/{role_id}")
-def assign_role(space_id: int, user_id: int, role_id: int, current_user: User = Depends(get_current_user), role_repo: RoleRepository = Depends(lambda: RoleRepository(get_db()))):
-    db = get_db()
-    if not check_permissions(db, current_user.id, space_id, "assign_role", role_repo):
+async def assign_role(
+    space_id: int,
+    user_id: int,
+    role_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Назначить роль пользователю (для прототипа упрощено)"""
+    space_repo = SpaceRepository(db)
+    role_repo = RoleRepository(db)
+    
+    # Проверка прав (только админ)
+    space = space_repo.get_by_id(space_id)
+    if not space or space.admin_id != current_user.id:
         raise HTTPException(status_code=403, detail="У вас нет прав на назначение ролей")
+    
     role_repo.assign_to_user(user_id, role_id)
     return {"message": "Роль успешно назначена"}
