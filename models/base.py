@@ -1,6 +1,7 @@
 from sqlalchemy import create_engine, Column, String, Boolean, DateTime, ForeignKey, BigInteger, Text, JSON, Index
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 import bcrypt
 from datetime import datetime, timezone
@@ -61,6 +62,9 @@ class Message(Base):
     attachment_id = Column(BigInteger, ForeignKey("attachments.id"))
     is_deleted = Column(Boolean, default=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+    
+    user = relationship("User", foreign_keys=[user_id], lazy="joined")
+    
     __table_args__ = (Index('ix_messages_chat_created_at', 'chat_id', 'created_at'),)
 
 class Attachment(Base):

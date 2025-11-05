@@ -30,6 +30,16 @@ class ConnectionManager:
 
 manager = ConnectionManager()
 
+@router.websocket("/ws/{chat_id}")
+async def websocket_endpoint(websocket: WebSocket, chat_id: int):
+    """WebSocket для получения сообщений в реальном времени"""
+    await manager.connect(websocket, chat_id)
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        manager.disconnect(websocket, chat_id)
+
 @router.post("/{chat_id}", response_model=MessageOut)
 def send_message(
     chat_id: int, 
@@ -40,7 +50,6 @@ def send_message(
     """Отправить сообщение в чат"""
     message_repo = MessageRepository(db)
     
-    # Проверка что пользователь - участник чата
     participant = db.query(ChatParticipant).filter(
         ChatParticipant.chat_id == chat_id, 
         ChatParticipant.user_id == current_user.id, 
@@ -50,7 +59,6 @@ def send_message(
     if not participant:
         raise HTTPException(status_code=403, detail="Вы не участник этого чата")
     
-    # Создание сообщения
     new_message = message_repo.create(
         chat_id, 
         current_user.id, 
@@ -58,6 +66,21 @@ def send_message(
         message.type, 
         message.attachment_id if hasattr(message, 'attachment_id') else None
     )
+    
+    import asyncio
+    asyncio.create_task(manager.broadcast({
+        "id": new_message.id,
+        "chat_id": new_message.chat_id,
+        "user_id": new_message.user_id,
+        "content": new_message.content,
+        "type": new_message.type,
+        "created_at": new_message.created_at.isoformat(),
+        "user": {
+            "id": current_user.id,
+            "nickname": current_user.nickname,
+            "avatar_url": current_user.avatar_url
+        }
+    }, chat_id))
     
     return new_message
 
@@ -72,7 +95,6 @@ def get_messages(
     """Получить сообщения из чата"""
     message_repo = MessageRepository(db)
     
-    # Проверка что пользователь - участник чата
     participant = db.query(ChatParticipant).filter(
         ChatParticipant.chat_id == chat_id, 
         ChatParticipant.user_id == current_user.id, 
@@ -97,7 +119,6 @@ def search_messages(
     """Поиск сообщений в чате"""
     message_repo = MessageRepository(db)
     
-    # Проверка что пользователь - участник чата
     participant = db.query(ChatParticipant).filter(
         ChatParticipant.chat_id == chat_id, 
         ChatParticipant.user_id == current_user.id, 

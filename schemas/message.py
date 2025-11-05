@@ -10,6 +10,15 @@ class MessageCreate(BaseModel):
 class MessageUpdate(BaseModel):
     content: str
 
+class UserInfo(BaseModel):
+    """Информация о пользователе для сообщения"""
+    id: int
+    nickname: str
+    avatar_url: Optional[str] = None
+    
+    class Config:
+        from_attributes = True
+
 class MessageOut(BaseModel):
     id: int
     chat_id: int
@@ -17,3 +26,7 @@ class MessageOut(BaseModel):
     content: Optional[str]
     type: str
     created_at: datetime
+    user: Optional[UserInfo] = None
+    
+    class Config:
+        from_attributes = True
