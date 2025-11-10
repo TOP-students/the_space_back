@@ -27,6 +27,7 @@ class MessageOut(BaseModel):
     type: str
     created_at: datetime
     user: Optional[UserInfo] = None
-    
+    user_nickname: Optional[str] = None  # Для совместимости с фронтендом
+
     class Config:
         from_attributes = True

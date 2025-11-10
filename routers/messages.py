@@ -1,7 +1,6 @@
-from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from typing import List
 from sqlalchemy.orm import Session
-import json
 
 from schemas.message import MessageCreate, MessageOut, MessageUpdate
 from utils.auth import get_current_user, get_db
@@ -10,35 +9,8 @@ from crud.message import MessageRepository
 
 router = APIRouter()
 
-class ConnectionManager:
-    def __init__(self):
-        self.active_connections: dict[int, List[WebSocket]] = {}
-
-    async def connect(self, websocket: WebSocket, chat_id: int):
-        await websocket.accept()
-        if chat_id not in self.active_connections:
-            self.active_connections[chat_id] = []
-        self.active_connections[chat_id].append(websocket)
-
-    def disconnect(self, websocket: WebSocket, chat_id: int):
-        if chat_id in self.active_connections:
-            self.active_connections[chat_id].remove(websocket)
-
-    async def broadcast(self, message: str, chat_id: int):
-        for connection in self.active_connections.get(chat_id, []):
-            await connection.send_text(message)
-
-manager = ConnectionManager()
-
-@router.websocket("/ws/{chat_id}")
-async def websocket_endpoint(websocket: WebSocket, chat_id: int):
-    """WebSocket для получения сообщений в реальном времени"""
-    await manager.connect(websocket, chat_id)
-    try:
-        while True:
-            await websocket.receive_text()
-    except WebSocketDisconnect:
-        manager.disconnect(websocket, chat_id)
+# FastAPI WebSocket код удалён - используем Socket.IO
+# См. utils/socketio_handlers.py для realtime функциональности
 
 @router.post("/{chat_id}", response_model=MessageOut)
 def send_message(
@@ -60,28 +32,15 @@ def send_message(
         raise HTTPException(status_code=403, detail="Вы не участник этого чата")
     
     new_message = message_repo.create(
-        chat_id, 
-        current_user.id, 
-        message.content, 
-        message.type, 
+        chat_id,
+        current_user.id,
+        message.content,
+        message.type,
         message.attachment_id if hasattr(message, 'attachment_id') else None
     )
-    
-    import asyncio
-    asyncio.create_task(manager.broadcast({
-        "id": new_message.id,
-        "chat_id": new_message.chat_id,
-        "user_id": new_message.user_id,
-        "content": new_message.content,
-        "type": new_message.type,
-        "created_at": new_message.created_at.isoformat(),
-        "user": {
-            "id": current_user.id,
-            "nickname": current_user.nickname,
-            "avatar_url": current_user.avatar_url
-        }
-    }, chat_id))
-    
+
+    # Broadcast теперь происходит через Socket.IO в utils/socketio_handlers.py
+
     return new_message
 
 @router.get("/{chat_id}", response_model=List[MessageOut])

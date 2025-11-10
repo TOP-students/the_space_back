@@ -1,0 +1,216 @@
+/* Overlay - затемнение фона */
+.modal-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.6);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 9999;
+    opacity: 0;
+    animation: fadeIn 0.3s ease forwards;
+}
+
+@keyframes fadeIn {
+    to {
+        opacity: 1;
+    }
+}
+
+.modal-overlay.closing {
+    animation: fadeOut 0.3s ease forwards;
+}
+
+@keyframes fadeOut {
+    to {
+        opacity: 0;
+    }
+}
+
+/* Модальное окно */
+.modal-window {
+    background: linear-gradient(135deg, #ffffff 0%, #f5f5f5 100%);
+    border-radius: 12px;
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3);
+    min-width: 320px;
+    max-width: 500px;
+    padding: 0;
+    transform: scale(0.8);
+    animation: scaleIn 0.3s ease forwards;
+}
+
+@keyframes scaleIn {
+    to {
+        transform: scale(1);
+    }
+}
+
+.modal-overlay.closing .modal-window {
+    animation: scaleOut 0.3s ease forwards;
+}
+
+@keyframes scaleOut {
+    to {
+        transform: scale(0.8);
+    }
+}
+
+/* Заголовок модального окна */
+.modal-header {
+    padding: 20px 24px;
+    border-bottom: 1px solid #e0e0e0;
+}
+
+.modal-title {
+    margin: 0;
+    font-size: 18px;
+    font-weight: 600;
+    color: #2c3e50;
+}
+
+/* Контент модального окна */
+.modal-body {
+    padding: 24px;
+    color: #34495e;
+    font-size: 15px;
+    line-height: 1.6;
+}
+
+/* Футер с кнопками */
+.modal-footer {
+    padding: 16px 24px;
+    display: flex;
+    justify-content: flex-end;
+    gap: 12px;
+    border-top: 1px solid #e0e0e0;
+    background: #fafafa;
+    border-radius: 0 0 12px 12px;
+}
+
+/* Кнопки модального окна */
+.modal-button {
+    padding: 10px 20px;
+    border: none;
+    border-radius: 6px;
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    min-width: 80px;
+}
+
+.modal-button-primary {
+    background: linear-gradient(135deg, #555 0%, #333 100%);
+    color: white;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+}
+
+.modal-button-primary:hover {
+    background: linear-gradient(135deg, #666 0%, #444 100%);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+    transform: translateY(-1px);
+}
+
+.modal-button-secondary {
+    background: #e0e0e0;
+    color: #555;
+}
+
+.modal-button-secondary:hover {
+    background: #d0d0d0;
+    transform: translateY(-1px);
+}
+
+.modal-button-danger {
+    background: linear-gradient(135deg, #c53030 0%, #9b2c2c 100%);
+    color: white;
+    box-shadow: 0 2px 8px rgba(197, 48, 48, 0.3);
+}
+
+.modal-button-danger:hover {
+    background: linear-gradient(135deg, #d53f3f 0%, #a83232 100%);
+    box-shadow: 0 4px 12px rgba(197, 48, 48, 0.4);
+    transform: translateY(-1px);
+}
+
+/* Иконки для разных типов модалок */
+.modal-icon {
+    width: 48px;
+    height: 48px;
+    margin: 0 auto 16px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 24px;
+}
+
+.modal-icon-info {
+    background: linear-gradient(135deg, #3498db 0%, #2980b9 100%);
+    color: white;
+}
+
+.modal-icon-warning {
+    background: linear-gradient(135deg, #f39c12 0%, #e67e22 100%);
+    color: white;
+}
+
+.modal-icon-error {
+    background: linear-gradient(135deg, #e74c3c 0%, #c0392b 100%);
+    color: white;
+}
+
+.modal-icon-success {
+    background: linear-gradient(135deg, #2ecc71 0%, #27ae60 100%);
+    color: white;
+}
+
+.modal-icon-question {
+    background: linear-gradient(135deg, #9b59b6 0%, #8e44ad 100%);
+    color: white;
+}
+
+/* Центрирование текста с иконкой */
+.modal-body.with-icon {
+    text-align: center;
+}
+
+/* Форма в модальном окне */
+.modal-form-group {
+    margin-bottom: 16px;
+}
+
+.modal-form-group label {
+    display: block;
+    margin-bottom: 6px;
+    font-size: 14px;
+    font-weight: 500;
+    color: #2c3e50;
+}
+
+.modal-form-group input,
+.modal-form-group textarea {
+    width: 100%;
+    padding: 10px 12px;
+    border: 1px solid #ddd;
+    border-radius: 6px;
+    font-size: 14px;
+    font-family: inherit;
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
+    box-sizing: border-box;
+}
+
+.modal-form-group input:focus,
+.modal-form-group textarea:focus {
+    outline: none;
+    border-color: #667eea;
+    box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+}
+
+.modal-form-group textarea {
+    resize: vertical;
+    min-height: 80px;
+}

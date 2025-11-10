@@ -1,6 +1,7 @@
 from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
+import socketio
 
 from models.base import Base, SessionLocal, engine
 from routers import auth, spaces, messages
@@ -11,6 +12,14 @@ from crud.role import RoleRepository
 from crud.ban import BanRepository
 
 app = FastAPI()
+
+# Инициализация Socket.IO сервера
+sio = socketio.AsyncServer(
+    async_mode='asgi',
+    cors_allowed_origins='*',
+    logger=True,
+    engineio_logger=True
+)
 
 # подключение зависимостей
 def get_db():
@@ -59,6 +68,12 @@ async def root():
 async def health_check():
     return {"status": "ok"}
 
+# Импорт обработчиков Socket.IO (после создания sio)
+from utils.socketio_handlers import register_socketio_handlers
+register_socketio_handlers(sio)
+
+# Обёртка FastAPI приложения в Socket.IO
+app_with_socketio = socketio.ASGIApp(sio, app)
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app_with_socketio, host="0.0.0.0", port=8000)
