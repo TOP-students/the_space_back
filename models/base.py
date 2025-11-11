@@ -5,8 +5,9 @@ from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 import bcrypt
 from datetime import datetime, timezone
-import os
 from dotenv import load_dotenv
+import os
+
 load_dotenv()
 
 # строка подключения к развёрнутой бд
@@ -42,6 +43,24 @@ class User(Base):
     is_bot = Column(Boolean, default=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    bio = Column(Text)  # о себе
+    profile_background_url = Column(String(500)) # фон профиля
+    display_name = Column(String(100))  # отображаемое имя (может отличаться от nickname)
+
+    user_roles = relationship("UserRole", back_populates="user")
+
+class UserRole(Base):
+    __tablename__ = "user_roles"
+    id = Column(BigInteger, primary_key=True, index=True, autoincrement=True)
+    user_id = Column(BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    role_id = Column(BigInteger, ForeignKey("roles.id", ondelete="CASCADE"), nullable=False, index=True)
+    assigned_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    role = relationship("Role", back_populates="user_roles")
+    user = relationship("User", back_populates="user_roles")
+
+    __table_args__ = (Index('ix_user_roles_user_role', 'user_id', 'role_id'),)
 
 class Chat(Base):
     __tablename__ = "chats"
@@ -85,6 +104,8 @@ class Role(Base):
     color = Column(String(7))
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
+    user_roles = relationship("UserRole", back_populates="role")
+
 class Space(Base):
     __tablename__ = "spaces"
     id = Column(BigInteger, primary_key=True, index=True, autoincrement=True)
@@ -113,11 +134,3 @@ class Ban(Base):
     until = Column(DateTime(timezone=True))
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     __table_args__ = (Index('ix_bans_user_space', 'user_id', 'space_id'),)
-
-class UserRole(Base):
-    __tablename__ = "user_roles"
-    id = Column(BigInteger, primary_key=True, index=True, autoincrement=True)
-    user_id = Column(BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
-    role_id = Column(BigInteger, ForeignKey("roles.id", ondelete="CASCADE"), nullable=False, index=True)
-    assigned_at = Column(DateTime(timezone=True), server_default=func.now())
-    __table_args__ = (Index('ix_user_roles_user_role', 'user_id', 'role_id'),)

@@ -4,7 +4,7 @@ import uvicorn
 import socketio
 
 from models.base import Base, SessionLocal, engine
-from routers import auth, spaces, messages
+from routers import auth, spaces, messages, profile
 from crud.user import UserRepository
 from crud.space import SpaceRepository
 from crud.message import MessageRepository
@@ -48,6 +48,7 @@ def get_ban_repo(db=Depends(get_db)):
 app.include_router(auth.router, prefix="/auth", tags=["auth"])
 app.include_router(spaces.router, prefix="/spaces", tags=["spaces"])
 app.include_router(messages.router, prefix="/messages", tags=["messages"])
+app.include_router(profile.router, prefix="/profile", tags=["profile"])
 
 # создание таблиц
 Base.metadata.create_all(bind=engine)

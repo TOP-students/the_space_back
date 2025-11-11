@@ -7,7 +7,7 @@ cffi==2.0.0
 click==8.3.0
 cloudinary==1.44.1
 colorama==0.4.6
-cryptography==46.0.1\
+cryptography==46.0.1
 ecdsa==0.19.1
 fastapi==0.117.1
 greenlet==3.2.4

@@ -37,9 +37,14 @@ async def get_all_spaces(
     
     spaces = db.query(Space).all()
     
+    # chat_id для каждой комнаты
     result = []
     for space in spaces:
-        chat = db.query(Chat).filter(Chat.space_id == space.id).first()
+        # групповой чат по ID (если ID совпадают с пространством)
+        chat = db.query(Chat).filter(
+            Chat.id == space.id,
+            Chat.type == "group"
+        ).first()
         
         result.append({
             "id": space.id,
@@ -74,11 +79,11 @@ async def join_space(
     space_repo = SpaceRepository(db)
     ban_repo = BanRepository(db)
     
-    # Проверка на бан
+    # проверка на бан
     if ban_repo.is_active(current_user.id, space_id):
         raise HTTPException(status_code=403, detail="Вы забанены в этом пространстве")
     
-    # Присоединение к комнате
+    # присоединение к комнате
     result = space_repo.join(space_id, current_user.id)
     if not result:
         raise HTTPException(status_code=404, detail="Комната не найдена")
@@ -117,7 +122,7 @@ async def kick_user(
     space_repo = SpaceRepository(db)
     role_repo = RoleRepository(db)
     
-    # Проверка прав (упрощённая - только админ может кикать)
+    # проверка прав (упрощённая - только админ может кикать)
     space = space_repo.get_by_id(space_id)
     if not space or space.admin_id != current_user.id:
         raise HTTPException(status_code=403, detail="У вас нет прав на это действие")
@@ -137,12 +142,12 @@ async def ban_user(
     space_repo = SpaceRepository(db)
     ban_repo = BanRepository(db)
     
-    # Проверка прав (только админ)
+    # проверка прав (только админ)
     space = space_repo.get_by_id(space_id)
     if not space or space.admin_id != current_user.id:
         raise HTTPException(status_code=403, detail="У вас нет прав на бан")
     
-    # Создание бана
+    # создание бана
     ban_repo.create(
         user_id, 
         current_user.id, 
@@ -151,10 +156,28 @@ async def ban_user(
         ban_data.until
     )
     
-    # Кик пользователя
+    # кик пользователя
     space_repo.kick(space_id, user_id)
     
     return {"message": "Пользователь забанен"}
+
+@router.get("/{space_id}/roles")
+async def get_space_roles(
+    space_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Получить список ролей комнаты"""
+    from models.base import Role
+    
+    roles = db.query(Role).filter(Role.space_id == space_id).all()
+    
+    return [{
+        "id": role.id,
+        "name": role.name,
+        "permissions": role.permissions,
+        "color": role.color
+    } for role in roles]
 
 @router.post("/{space_id}/assign-role/{user_id}/{role_id}")
 async def assign_role(
@@ -164,13 +187,13 @@ async def assign_role(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Назначить роль пользователю (для прототипа упрощено)"""
-    space_repo = SpaceRepository(db)
+    """Назначить роль пользователю"""
+    from models.permissions import Permission
+    
     role_repo = RoleRepository(db)
     
-    # Проверка прав (только админ)
-    space = space_repo.get_by_id(space_id)
-    if not space or space.admin_id != current_user.id:
+    # проверка прав - нужно разрешение MANAGE_ROLES
+    if not role_repo.check_permission(current_user.id, space_id, Permission.MANAGE_ROLES):
         raise HTTPException(status_code=403, detail="У вас нет прав на назначение ролей")
     
     role_repo.assign_to_user(user_id, role_id)

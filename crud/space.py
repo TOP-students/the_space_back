@@ -1,11 +1,16 @@
 from sqlalchemy.orm import Session
+
 from models.base import Space, Chat, ChatParticipant, User
+from models.permissions import RolePreset, Permission
 
 class SpaceRepository:
     def __init__(self, db: Session):
         self.db = db
 
     def create(self, name: str, description: str, admin_id: int, background_url: str):
+        from models.base import Role, UserRole
+        
+        # space
         space = Space(
             name=name, 
             description=description, 
@@ -16,6 +21,7 @@ class SpaceRepository:
         self.db.commit()
         self.db.refresh(space)
         
+        # групповой чат для space
         chat = Chat(
             type="group",
             user1_id=admin_id,
@@ -26,6 +32,39 @@ class SpaceRepository:
         self.db.commit()
         self.db.refresh(chat)
         
+        # базовые роли
+        owner_role = Role(
+            space_id=space.id,
+            name=RolePreset.OWNER["name"],
+            permissions=RolePreset.OWNER["permissions"],
+            color=RolePreset.OWNER["color"]
+        )
+        self.db.add(owner_role)
+        
+        moderator_role = Role(
+            space_id=space.id,
+            name=RolePreset.MODERATOR["name"],
+            permissions=RolePreset.MODERATOR["permissions"],
+            color=RolePreset.MODERATOR["color"]
+        )
+        self.db.add(moderator_role)
+        
+        member_role = Role(
+            space_id=space.id,
+            name=RolePreset.MEMBER["name"],
+            permissions=RolePreset.MEMBER["permissions"],
+            color=RolePreset.MEMBER["color"]
+        )
+        self.db.add(member_role)
+        
+        self.db.commit()
+        self.db.refresh(owner_role)
+        
+        # создатель = владелец
+        user_role = UserRole(user_id=admin_id, role_id=owner_role.id)
+        self.db.add(user_role)
+        
+        # админ = участник
         participant = ChatParticipant(
             chat_id=chat.id, 
             user_id=admin_id, 
