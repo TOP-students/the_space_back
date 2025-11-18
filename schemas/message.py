@@ -1,6 +1,7 @@
 from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime
+from schemas.attachment import AttachmentOut
 
 class MessageCreate(BaseModel):
     content: str
@@ -27,7 +28,9 @@ class MessageOut(BaseModel):
     type: str
     created_at: datetime
     user: Optional[UserInfo] = None
-    user_nickname: Optional[str] = None  # Для совместимости с фронтендом
+    user_nickname: Optional[str] = None  # для совместимости с фронтендом
+    attachment: AttachmentOut | None = None
+    reactions: Optional[list] = None
 
     class Config:
         from_attributes = True

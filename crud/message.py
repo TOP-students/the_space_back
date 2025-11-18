@@ -1,6 +1,6 @@
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import and_, or_, func, text
-from models.base import Message, User
+from models.base import Message, User, Attachment
 
 class MessageRepository:
     def __init__(self, db: Session):
@@ -22,6 +22,37 @@ class MessageRepository:
         message.user = user
         message.user_nickname = user.nickname if user else None
 
+        return message
+    
+    def create_with_attachment(self, chat_id: int, user_id: int, content: str, type: str, file_info: dict):
+        """Создать сообщение с вложением"""
+        
+        attachment = Attachment(
+            message_id=None,  # Временно
+            file_url=file_info["url"],
+            file_type=file_info.get("format"),
+            file_size=file_info.get("size")
+        )
+        self.db.add(attachment)
+        self.db.flush()  # ID без коммита
+        
+        message = Message(
+            chat_id=chat_id,
+            user_id=user_id,
+            content=content or file_info.get("filename", "Файл"),
+            type=type,
+            attachment_id=attachment.id
+        )
+        self.db.add(message)
+        
+        attachment.message_id = message.id
+        
+        self.db.commit()
+        self.db.refresh(message)
+        
+        message.user = self.db.query(User).filter(User.id == user_id).first()
+        message.attachment = attachment
+        
         return message
 
     def get_by_id(self, message_id: int):

@@ -10,7 +10,7 @@ import os
 
 load_dotenv()
 
-# строка подключения к развёрнутой бд
+# строка подключения к бд
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 engine = create_engine(DATABASE_URL)
@@ -94,6 +94,23 @@ class Attachment(Base):
     file_type = Column(String(50))
     file_size = Column(BigInteger)
     uploaded_at = Column(DateTime(timezone=True), server_default=func.now())
+
+class Reaction(Base):
+    __tablename__ = "reactions"
+
+    id = Column(BigInteger, primary_key=True, index=True, autoincrement=True)
+    message_id = Column(BigInteger, ForeignKey("messages.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id = Column(BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    reaction = Column(String(10), nullable=False)
+    added_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    # связи (опционально)
+    user = relationship("User", lazy="joined")
+    message = relationship("Message", lazy="joined")
+
+    __table_args__ = (
+        Index("ux_reactions_message_user_reaction", "message_id", "user_id", "reaction", unique=True),
+    )
 
 class Role(Base):
     __tablename__ = "roles"
