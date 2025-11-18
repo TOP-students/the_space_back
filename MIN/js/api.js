@@ -96,6 +96,11 @@ const API = {
         return this.get('/auth/me');
     },
 
+    // Проверить существование пользователя
+    async checkUser(identifier) {
+        return this.get(`/auth/check-user?identifier=${encodeURIComponent(identifier)}`);
+    },
+
     // === SPACES ENDPOINTS ===
 
     // Получить все пространства
@@ -116,6 +121,31 @@ const API = {
     // Получить участников пространства
     async getSpaceParticipants(spaceId) {
         return this.get(`/spaces/${spaceId}/participants`);
+    },
+
+    // Добавить пользователя в пространство
+    async addUserToSpace(spaceId, userIdentifier) {
+        return this.post(`/spaces/${spaceId}/add-user?user_identifier=${encodeURIComponent(userIdentifier)}`);
+    },
+
+    // Изменить название пространства
+    async updateSpaceName(spaceId, newName) {
+        return this.patch(`/spaces/${spaceId}/name?new_name=${encodeURIComponent(newName)}`);
+    },
+
+    // Удалить пользователя из пространства
+    async kickUser(spaceId, userId) {
+        return this.delete(`/spaces/${spaceId}/kick/${userId}`);
+    },
+
+    // Удалить пространство
+    async deleteSpace(spaceId) {
+        return this.delete(`/spaces/${spaceId}/delete`);
+    },
+
+    // Покинуть пространство
+    async leaveSpace(spaceId) {
+        return this.post(`/spaces/${spaceId}/leave`, {});
     },
 
     // === MESSAGES ENDPOINTS ===
@@ -143,6 +173,77 @@ const API = {
     // Удалить сообщение
     async deleteMessage(chatId, messageId) {
         return this.delete(`/messages/${chatId}/${messageId}`);
+    },
+
+    // === PROFILE ENDPOINTS ===
+
+    // Получить свой профиль
+    async getMyProfile() {
+        return this.get('/profile/me');
+    },
+
+    // Получить профиль пользователя по ID
+    async getUserProfile(userId) {
+        return this.get(`/profile/${userId}`);
+    },
+
+    // Обновить профиль
+    async updateProfile(data) {
+        return this.patch('/profile/me', data);
+    },
+
+    // Загрузить аватар
+    async uploadAvatar(file) {
+        const token = AuthService.getToken();
+        const formData = new FormData();
+        formData.append('file', file);
+
+        const response = await fetch(`${CONFIG.API_BASE_URL}/profile/upload-avatar`, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${token}`
+            },
+            body: formData
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+            if (response.status === 401) {
+                AuthService.logout();
+                throw new Error('Сессия истекла. Войдите снова.');
+            }
+            throw new Error(data.detail || 'Ошибка загрузки аватара');
+        }
+
+        return data;
+    },
+
+    // Загрузить баннер профиля
+    async uploadBanner(file) {
+        const token = AuthService.getToken();
+        const formData = new FormData();
+        formData.append('file', file);
+
+        const response = await fetch(`${CONFIG.API_BASE_URL}/profile/upload-banner`, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${token}`
+            },
+            body: formData
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+            if (response.status === 401) {
+                AuthService.logout();
+                throw new Error('Сессия истекла. Войдите снова.');
+            }
+            throw new Error(data.detail || 'Ошибка загрузки баннера');
+        }
+
+        return data;
     }
 };
 

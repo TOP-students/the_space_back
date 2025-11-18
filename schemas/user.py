@@ -11,6 +11,8 @@ class UserOut(BaseModel):
     nickname: str
     email: Optional[str]
     status: str
+    avatar_url: Optional[str] = None
+    profile_background_url: Optional[str] = None
 
 class Token(BaseModel):
     access_token: str

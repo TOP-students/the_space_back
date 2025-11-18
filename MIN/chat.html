@@ -48,9 +48,65 @@
             </div>
         </main>
         <aside class="sidebar-right">
-            <!-- Сюда потом можно будет добавить контент -->
+            <button class="sidebar-right-toggle" id="sidebar-right-toggle">
+                <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M15 18L9 12L15 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+            </button>
+            <div class="sidebar-right-content" id="sidebar-right-content">
+                <!-- Контент будет добавляться динамически -->
+            </div>
         </aside>
     </div>
+
+    <!-- Модальное окно профиля -->
+    <div id="profile-modal" class="profile-modal">
+        <div class="profile-modal-content">
+            <div class="profile-header">
+                <div class="profile-banner"></div>
+                <!-- Контейнер аватара с overlay для загрузки -->
+                <div class="profile-avatar-container" id="avatar-container">
+                    <img src="assets/icons/avatar.svg" alt="Аватар" class="profile-avatar" id="profile-avatar-img">
+                    <!-- Overlay появляется при наведении (только для своего профиля) -->
+                    <div class="profile-avatar-overlay" id="avatar-upload-btn" style="display: none;">
+                        <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                            <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                            <circle cx="12" cy="13" r="4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                        <span class="avatar-upload-text">Изменить</span>
+                    </div>
+                </div>
+            </div>
+            <div class="profile-info">
+                <h2 class="profile-name">UserName</h2>
+                <span class="profile-email">email@example.com</span>
+            </div>
+            <div class="profile-details">
+                <div class="detail-item">
+                    <span class="detail-label">ID:</span>
+                    <span class="detail-value" id="profile-user-id">#123456789</span>
+                </div>
+                <div class="detail-item">
+                    <span class="detail-label">Никнейм:</span>
+                    <span class="detail-value" id="profile-nickname">username</span>
+                </div>
+            </div>
+            <div class="profile-modal-controls">
+                <!-- Кнопка загрузки баннера (только для своего профиля) -->
+                <button class="profile-edit-button" id="banner-upload-btn" style="display: none;" title="Изменить баннер">
+                    <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <path d="M11 4H4C3.46957 4 2.96086 4.21071 2.58579 4.58579C2.21071 4.96086 2 5.46957 2 6V20C2 20.5304 2.21071 21.0391 2.58579 21.4142C2.96086 21.7893 3.46957 22 4 22H18C18.5304 22 19.0391 21.7893 19.4142 21.4142C19.7893 21.0391 20 20.5304 20 20V13" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        <path d="M18.5 2.50001C18.8978 2.10219 19.4374 1.87869 20 1.87869C20.5626 1.87869 21.1022 2.10219 21.5 2.50001C21.8978 2.89784 22.1213 3.43741 22.1213 4.00001C22.1213 4.56262 21.8978 5.10219 21.5 5.50001L12 15L8 16L9 12L18.5 2.50001Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Скрытые input для загрузки файлов -->
+    <input type="file" id="avatar-file-input" accept="image/jpeg,image/jpg,image/png,image/webp" style="display: none;">
+    <input type="file" id="banner-file-input" accept="image/jpeg,image/jpg,image/png,image/webp" style="display: none;">
+
     <!-- Socket.IO клиент -->
     <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
     <script src="js/config.js"></script>

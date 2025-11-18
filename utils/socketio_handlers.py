@@ -257,7 +257,8 @@ def register_socketio_handlers(sio: socketio.AsyncServer):
                     'created_at': new_message.created_at.isoformat(),
                     'timestamp': new_message.created_at.isoformat(),
                     'user_nickname': user.nickname,
-                    'nickname': user.nickname  # для совместимости
+                    'nickname': user.nickname,  # для совместимости
+                    'user_avatar_url': user.avatar_url  # добавляем аватар
                 }
 
                 try:

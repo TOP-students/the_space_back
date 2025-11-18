@@ -57,3 +57,28 @@ def login_for_access_token(
 async def get_me(current_user: User = Depends(get_current_user)):
     """Получить информацию о текущем пользователе"""
     return current_user
+
+@router.get("/check-user")
+async def check_user(
+    identifier: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Проверить существование пользователя по никнейму или ID"""
+    user = None
+
+    # Проверяем, является ли identifier числом (ID)
+    if identifier.isdigit():
+        user = db.query(User).filter(User.id == int(identifier)).first()
+    else:
+        # Ищем по никнейму (точное совпадение)
+        user = db.query(User).filter(User.nickname == identifier).first()
+
+    if not user:
+        raise HTTPException(status_code=404, detail="Пользователь не найден")
+
+    return {
+        "id": user.id,
+        "nickname": user.nickname,
+        "avatar_url": user.avatar_url
+    }

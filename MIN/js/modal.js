@@ -66,25 +66,7 @@ const Modal = {
     // Показать форму создания комнаты
     createRoom() {
         return new Promise((resolve) => {
-            this._showForm({
-                title: 'Создать новую комнату',
-                fields: [
-                    { id: 'room-name', label: 'Название комнаты', type: 'text', required: true, placeholder: 'Введите название...' },
-                    { id: 'room-description', label: 'Описание (необязательно)', type: 'textarea', required: false, placeholder: 'Описание комнаты...' }
-                ],
-                buttons: [
-                    {
-                        text: 'Отмена',
-                        class: 'modal-button-secondary',
-                        onClick: () => resolve(null)
-                    },
-                    {
-                        text: 'Создать',
-                        class: 'modal-button-primary',
-                        onClick: (data) => resolve(data)
-                    }
-                ]
-            });
+            this._showCreateRoomForm(resolve);
         });
     },
 
@@ -296,11 +278,243 @@ const Modal = {
         }, 300); // Время совпадает с анимацией в CSS
     },
 
+    // Закрыть все открытые модальные окна
+    closeAll() {
+        const overlays = document.querySelectorAll('.modal-overlay');
+        overlays.forEach(overlay => this._close(overlay));
+    },
+
     // Экранирование HTML
     _escapeHtml(text) {
         const div = document.createElement('div');
         div.textContent = text;
         return div.innerHTML;
+    },
+
+    // Показать info
+    info(message, title = 'Информация') {
+        return this.alert(message, title, 'info');
+    },
+
+    // Показать prompt (ввод текста)
+    prompt(message, defaultValue = '', title = 'Введите значение') {
+        return new Promise((resolve) => {
+            this._showForm({
+                title,
+                message,
+                fields: [
+                    { id: 'prompt-input', label: '', type: 'text', required: true, value: defaultValue, placeholder: message }
+                ],
+                buttons: [
+                    {
+                        text: 'Отмена',
+                        class: 'modal-button-secondary',
+                        onClick: () => resolve(null)
+                    },
+                    {
+                        text: 'OK',
+                        class: 'modal-button-primary',
+                        onClick: () => {
+                            const input = document.getElementById('prompt-input');
+                            resolve(input ? input.value : null);
+                        }
+                    }
+                ]
+            });
+        });
+    },
+
+    // Показать кастомный контент
+    custom(htmlContent, title = '') {
+        return new Promise((resolve) => {
+            const overlay = document.createElement('div');
+            overlay.className = 'modal-overlay';
+
+            const modal = document.createElement('div');
+            modal.className = 'modal';
+            modal.innerHTML = `
+                ${title ? `<div class="modal-header"><h2>${this._escapeHtml(title)}</h2></div>` : ''}
+                <div class="modal-body">
+                    ${htmlContent}
+                </div>
+                <div class="modal-footer">
+                    <button class="modal-button modal-button-primary">Закрыть</button>
+                </div>
+            `;
+
+            overlay.appendChild(modal);
+            document.body.appendChild(overlay);
+
+            // Обработчики закрытия
+            const closeBtn = modal.querySelector('.modal-button');
+            closeBtn.addEventListener('click', () => {
+                this._close(overlay);
+                resolve(true);
+            });
+
+            overlay.addEventListener('click', (e) => {
+                if (e.target === overlay) {
+                    this._close(overlay);
+                    resolve(false);
+                }
+            });
+        });
+    },
+
+    // Форма создания комнаты с участниками
+    _showCreateRoomForm(resolve) {
+        const overlay = document.createElement('div');
+        overlay.className = 'modal-overlay';
+
+        const modal = document.createElement('div');
+        modal.className = 'modal-window';
+
+        // Массив для хранения добавленных участников
+        const participantsList = [];
+
+        modal.innerHTML = `
+            <div class="modal-header">
+                <h3 class="modal-title">Создать новую комнату</h3>
+            </div>
+            <div class="modal-body">
+                <form id="create-room-form">
+                    <div class="modal-form-group">
+                        <label for="room-name">Название комнаты</label>
+                        <input type="text" id="room-name" required placeholder="Введите название..."/>
+                    </div>
+                    <div class="modal-form-group">
+                        <label for="room-description">Описание (необязательно)</label>
+                        <textarea id="room-description" placeholder="Описание комнаты..." rows="3"></textarea>
+                    </div>
+                    <div class="modal-form-group">
+                        <label>Добавить участников (необязательно)</label>
+                        <div style="display: flex; gap: 8px; margin-bottom: 8px;">
+                            <input type="text" id="participant-input" placeholder="Никнейм или ID пользователя" style="flex: 1;"/>
+                            <button type="button" id="add-participant-btn" class="modal-button modal-button-primary" style="min-width: auto; padding: 10px 16px;">Добавить</button>
+                        </div>
+                        <div id="participant-error" style="color: #dc3545; font-size: 13px; margin-bottom: 8px; display: none;"></div>
+                        <div id="participants-list" style="display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px;"></div>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button class="modal-button modal-button-secondary" id="cancel-btn">Отмена</button>
+                <button class="modal-button modal-button-primary" id="create-btn">Создать</button>
+            </div>
+        `;
+
+        overlay.appendChild(modal);
+        document.body.appendChild(overlay);
+
+        const participantInput = modal.querySelector('#participant-input');
+        const addParticipantBtn = modal.querySelector('#add-participant-btn');
+        const participantsListDiv = modal.querySelector('#participants-list');
+        const participantError = modal.querySelector('#participant-error');
+
+        // Добавление участника
+        addParticipantBtn.addEventListener('click', async () => {
+            const identifier = participantInput.value.trim();
+            if (!identifier) return;
+
+            participantError.style.display = 'none';
+            addParticipantBtn.disabled = true;
+            addParticipantBtn.textContent = '...';
+
+            try {
+                const user = await API.checkUser(identifier);
+
+                // Проверяем, не добавлен ли уже
+                if (participantsList.find(p => p.id === user.id)) {
+                    participantError.textContent = 'Этот пользователь уже добавлен';
+                    participantError.style.display = 'block';
+                    return;
+                }
+
+                // Добавляем в список
+                participantsList.push(user);
+
+                // Создаем чип
+                const chip = document.createElement('div');
+                chip.className = 'participant-chip';
+                chip.innerHTML = `
+                    <span>${this._escapeHtml(user.nickname)}</span>
+                    <button type="button" class="remove-participant" data-user-id="${user.id}">×</button>
+                `;
+                participantsListDiv.appendChild(chip);
+
+                // Очищаем input
+                participantInput.value = '';
+
+                // Обработчик удаления
+                chip.querySelector('.remove-participant').addEventListener('click', () => {
+                    const index = participantsList.findIndex(p => p.id === user.id);
+                    if (index > -1) {
+                        participantsList.splice(index, 1);
+                    }
+                    chip.remove();
+                });
+
+            } catch (error) {
+                console.error('Check user error:', error);
+                participantError.textContent = error.message || 'Пользователь не найден';
+                participantError.style.display = 'block';
+            } finally {
+                addParticipantBtn.disabled = false;
+                addParticipantBtn.textContent = 'Добавить';
+            }
+        });
+
+        // Enter для добавления участника
+        participantInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                addParticipantBtn.click();
+            }
+        });
+
+        // Кнопка "Создать"
+        modal.querySelector('#create-btn').addEventListener('click', (e) => {
+            e.preventDefault();
+
+            const name = modal.querySelector('#room-name').value.trim();
+            const description = modal.querySelector('#room-description').value.trim();
+
+            if (!name) {
+                Modal.error('Введите название комнаты');
+                return;
+            }
+
+            this._close(overlay);
+            resolve({
+                name,
+                description,
+                participants: participantsList
+            });
+        });
+
+        // Кнопка "Отмена"
+        modal.querySelector('#cancel-btn').addEventListener('click', () => {
+            this._close(overlay);
+            resolve(null);
+        });
+
+        // Закрытие по клику на overlay
+        overlay.addEventListener('click', (e) => {
+            if (e.target === overlay) {
+                this._close(overlay);
+                resolve(null);
+            }
+        });
+
+        // ESC для закрытия
+        const escHandler = (e) => {
+            if (e.key === 'Escape') {
+                this._close(overlay);
+                resolve(null);
+                document.removeEventListener('keydown', escHandler);
+            }
+        };
+        document.addEventListener('keydown', escHandler);
     }
 };
 

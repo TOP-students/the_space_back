@@ -3,6 +3,11 @@ from fastapi.security import OAuth2PasswordBearer
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 from sqlalchemy.orm import Session
+import os
+from dotenv import load_dotenv
+
+# Загружаем переменные окружения
+load_dotenv()
 
 # Попробуем сначала python-jose, если нет - используем PyJWT
 try:
@@ -14,9 +19,9 @@ except ImportError:
 from models.base import SessionLocal, User, verify_password
 
 # Конфигурация JWT
-SECRET_KEY = "your-super-secret-key-change-me-in-production-12345"  # В проде замени на env переменную!
+SECRET_KEY = os.getenv("SECRET_KEY", "your-super-secret-key-change-me-in-production-12345")
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 1440  # 24 часа
+ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "1440"))  # 24 часа по умолчанию
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/token")
 

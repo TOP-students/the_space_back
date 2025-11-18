@@ -39,10 +39,75 @@ body {
 
 .sidebar-right {
     width: 70px;
-    background-color: #9b7575;
+    background-color: #925d5c;
     height: 100vh;
     box-sizing: border-box;
     box-shadow: -2px 0 5px rgba(0, 0, 0, 0.1);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    transition: width 0.3s ease;
+    position: relative;
+    cursor: pointer;
+}
+
+.sidebar-right.expanded {
+    width: 280px;
+    background-color: #925d5c;
+    overflow-y: auto;
+    cursor: default;
+}
+
+.sidebar-right.hidden {
+    transform: translateX(100%);
+}
+
+.sidebar-right-toggle {
+    position: absolute;
+    top: 20px;
+    right: 20px;
+    width: 40px;
+    height: 40px;
+    background: rgba(102, 126, 234, 0.15);
+    backdrop-filter: blur(10px);
+    border: none;
+    border-radius: 50%;
+    cursor: pointer;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.3s ease;
+    z-index: 10;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.sidebar-right.expanded .sidebar-right-toggle {
+    display: flex;
+}
+
+.sidebar-right-toggle:hover {
+    transform: scale(1.1);
+    background: rgba(102, 126, 234, 0.25);
+}
+
+.sidebar-right-toggle svg {
+    width: 20px;
+    height: 20px;
+    color: #667eea;
+    transition: transform 0.3s ease;
+}
+
+.sidebar-right-content {
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 0.3s ease, visibility 0.3s ease;
+    pointer-events: none;
+}
+
+.sidebar-right.expanded .sidebar-right-content {
+    opacity: 1;
+    visibility: visible;
+    pointer-events: auto;
 }
 
 /* Профиль пользователя */
@@ -328,6 +393,11 @@ body {
     background-color: #f8f9fa !important;
     width: auto !important;
     min-height: 44px !important;
+    max-height: 150px !important;
+    resize: none !important;
+    overflow-y: auto !important;
+    line-height: 1.5 !important;
+    word-wrap: break-word !important;
 }
 
 #message-input:focus {
@@ -567,4 +637,631 @@ body {
 .message-edit-cancel:hover {
     background: #cf1322;
     transform: scale(1.1);
+}
+
+/* === УПРАВЛЕНИЕ ПРОСТРАНСТВОМ === */
+
+.chat-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.space-name {
+    flex: 1;
+    cursor: pointer;
+}
+
+.space-settings-btn {
+    background: none;
+    border: none;
+    font-size: 18px;
+    cursor: pointer;
+    padding: 5px;
+    opacity: 0.6;
+    transition: all 0.2s;
+}
+
+.space-settings-btn:hover {
+    opacity: 1;
+    transform: scale(1.2);
+}
+
+/* Меню управления пространством */
+.space-settings-menu {
+    padding: 0;
+    background: transparent;
+    border-radius: 0;
+    margin: -24px;
+}
+
+.space-settings-header {
+    display: flex;
+    align-items: center;
+    gap: 15px;
+    padding: 24px;
+    background: linear-gradient(135deg, #a52a2a 0%, #8B0000 100%);
+    color: white;
+    border-radius: 12px 12px 0 0;
+    margin: 0;
+    box-shadow: 0 2px 8px rgba(165, 42, 42, 0.3);
+}
+
+.space-icon-large {
+    width: 56px;
+    height: 56px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.25);
+    backdrop-filter: blur(10px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 26px;
+    font-weight: bold;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+}
+
+.space-settings-header h3 {
+    margin: 0;
+    font-size: 20px;
+    font-weight: 600;
+}
+
+.space-settings-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    padding: 0;
+    background: white;
+}
+
+.space-action-btn {
+    display: flex;
+    align-items: center;
+    gap: 15px;
+    padding: 18px 24px;
+    background: white;
+    border: none;
+    border-bottom: 1px solid #f0f0f0;
+    cursor: pointer;
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    text-align: left;
+    border-left: 3px solid transparent;
+}
+
+.space-action-btn:hover {
+    background: linear-gradient(90deg, #fef5f5 0%, #ffffff 100%);
+    border-left-color: #a52a2a;
+}
+
+.space-action-btn:last-child {
+    border-bottom: none;
+    border-radius: 0 0 12px 12px;
+}
+
+.space-action-danger {
+    border-top: 2px solid #f0f0f0;
+}
+
+.space-action-danger:hover {
+    background: linear-gradient(90deg, #fff5f5 0%, #ffffff 100%);
+    border-left-color: #dc3545;
+}
+
+.space-action-danger .action-title {
+    color: #dc3545;
+}
+
+.space-action-danger .action-desc {
+    color: #dc3545;
+    opacity: 0.7;
+}
+
+.space-action-warning {
+    border-top: 2px solid #f0f0f0;
+}
+
+.space-action-warning:hover {
+    background: linear-gradient(90deg, #fff9f0 0%, #ffffff 100%);
+    border-left-color: #ff9800;
+}
+
+.space-action-warning .action-title {
+    color: #ff9800;
+}
+
+.space-action-warning .action-desc {
+    color: #ff9800;
+    opacity: 0.7;
+}
+
+.action-icon {
+    font-size: 28px;
+    min-width: 40px;
+    text-align: center;
+}
+
+.action-text {
+    flex: 1;
+}
+
+.action-title {
+    font-size: 15px;
+    font-weight: 600;
+    color: #333;
+    margin-bottom: 2px;
+}
+
+.action-desc {
+    font-size: 12px;
+    color: #888;
+}
+
+/* Список участников */
+.participants-container {
+    padding: 0;
+    background: transparent;
+    border-radius: 0;
+    margin: -24px;
+}
+
+.participants-header {
+    padding: 20px 24px;
+    background: linear-gradient(135deg, #a52a2a 0%, #8B0000 100%);
+    color: white;
+    border-radius: 12px 12px 0 0;
+    margin: 0;
+    box-shadow: 0 2px 8px rgba(165, 42, 42, 0.3);
+}
+
+.participants-count {
+    font-size: 15px;
+    color: white;
+    font-weight: 600;
+}
+
+.participants-list {
+    max-height: 400px;
+    overflow-y: auto;
+    padding: 12px 0;
+    background: white;
+}
+
+.participant-card {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 14px 24px;
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    border-left: 3px solid transparent;
+}
+
+.participant-card:hover {
+    background: linear-gradient(90deg, #fef5f5 0%, #ffffff 100%);
+    border-left-color: #a52a2a;
+}
+
+.participant-avatar {
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #a52a2a 0%, #8B0000 100%);
+    color: white;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: bold;
+    font-size: 16px;
+}
+
+.participant-info {
+    flex: 1;
+}
+
+.participant-name {
+    font-size: 15px;
+    font-weight: 600;
+    color: #333;
+    margin-bottom: 2px;
+}
+
+.participant-badge {
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 10px;
+    display: inline-block;
+    font-weight: 500;
+}
+
+.admin-badge {
+    background: #fff3e0;
+    color: #f57c00;
+}
+
+.member-badge {
+    background: #e8f5e9;
+    color: #388e3c;
+}
+
+.participant-kick-btn {
+    background: none;
+    border: none;
+    font-size: 18px;
+    cursor: pointer;
+    opacity: 0.5;
+    transition: all 0.2s;
+    padding: 5px;
+}
+
+.participant-kick-btn:hover {
+    opacity: 1;
+    transform: scale(1.2);
+}
+
+.btn-sm {
+    padding: 5px 10px;
+    font-size: 12px;
+}
+
+/* Правая панель - информация о чате */
+.chat-info-header {
+    padding: 20px;
+    border-bottom: 2px solid #e0e0e0;
+    color: white;
+}
+
+.chat-info-title {
+    font-size: 18px;
+    font-weight: 600;
+    margin: 0;
+    text-align: center;
+    color: white;
+}
+
+.chat-info-section {
+    padding: 20px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.chat-info-section-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: rgba(255, 255, 255, 0.9);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 15px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.chat-info-section-title::before {
+    content: '';
+    width: 3px;
+    height: 14px;
+    background: rgba(255, 255, 255, 0.7);
+    border-radius: 2px;
+}
+
+.chat-members-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.chat-member-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px;
+    border-radius: 8px;
+    transition: background 0.2s;
+}
+
+.chat-member-item:hover {
+    background: rgba(255, 255, 255, 0.1);
+}
+
+.chat-member-avatar {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.2);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: white;
+    font-weight: 600;
+    font-size: 14px;
+    flex-shrink: 0;
+}
+
+.chat-member-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.chat-member-name {
+    font-size: 14px;
+    font-weight: 500;
+    color: white;
+    margin-bottom: 2px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.chat-member-role {
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 10px;
+    display: inline-block;
+}
+
+.chat-member-role.admin {
+    background: rgba(255, 193, 7, 0.3);
+    color: #ffd54f;
+    border: 1px solid rgba(255, 193, 7, 0.5);
+}
+
+.chat-member-role.member {
+    background: rgba(76, 175, 80, 0.3);
+    color: #a5d6a7;
+    border: 1px solid rgba(76, 175, 80, 0.5);
+}
+
+.no-members {
+    text-align: center;
+    color: rgba(255, 255, 255, 0.5);
+    font-size: 13px;
+    padding: 20px;
+}
+
+.sidebar-right-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    color: rgba(255, 255, 255, 0.6);
+    padding: 20px;
+    text-align: center;
+}
+
+.sidebar-right-empty svg {
+    width: 80px;
+    height: 80px;
+    opacity: 0.3;
+    margin-bottom: 15px;
+}
+
+.sidebar-right-empty p {
+    color: rgba(255, 255, 255, 0.7);
+}
+
+/* === МОДАЛЬНОЕ ОКНО ПРОФИЛЯ === */
+
+.profile-modal {
+    display: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0, 0, 0, 0.5);
+    z-index: 10000;
+    animation: fadeIn 0.3s ease;
+}
+
+.profile-modal.show {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.profile-modal-content {
+    position: relative;
+    width: 580px;
+    max-width: 90%;
+    height: auto;
+    max-height: 90vh;
+    background-color: #fff;
+    border-radius: 16px;
+    overflow: hidden;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+    animation: scaleIn 0.3s ease;
+}
+
+@keyframes scaleIn {
+    from {
+        transform: scale(0.9);
+        opacity: 0;
+    }
+    to {
+        transform: scale(1);
+        opacity: 1;
+    }
+}
+
+/* Профиль - Header */
+.profile-header {
+    position: relative;
+    height: 240px;
+}
+
+.profile-banner {
+    width: 100%;
+    height: 100%;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    background-size: cover;
+    background-position: center;
+}
+
+.profile-avatar {
+    position: absolute;
+    bottom: -65px;
+    left: 50px;
+    width: 120px;
+    height: 120px;
+    border-radius: 50%;
+    border: 5px solid #fff;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+/* Профиль - Info */
+.profile-info {
+    padding: 80px 40px 20px 200px;
+}
+
+.profile-name {
+    margin: 0;
+    font-size: 24px;
+    font-weight: 600;
+    color: #2c3e50;
+}
+
+.profile-email {
+    display: block;
+    font-size: 14px;
+    color: #7f8c8d;
+    margin-top: 4px;
+}
+
+/* Профиль - Details */
+.profile-details {
+    padding: 20px 50px 40px;
+}
+
+.detail-item {
+    margin-bottom: 15px;
+    display: flex;
+    align-items: center;
+    padding: 10px;
+    border-radius: 8px;
+    transition: background 0.2s;
+}
+
+.detail-item:hover {
+    background: #f8f9fa;
+}
+
+.detail-label {
+    color: #666;
+    margin-right: 10px;
+    font-weight: 600;
+    min-width: 100px;
+}
+
+.detail-value {
+    color: #2c3e50;
+}
+
+/* Профиль - Controls */
+.profile-modal-controls {
+    position: absolute;
+    top: 20px;
+    right: 20px;
+    display: flex;
+    gap: 10px;
+    z-index: 10;
+}
+
+.profile-edit-button {
+    width: 40px;
+    height: 40px;
+    background: rgba(255, 255, 255, 0.2);
+    backdrop-filter: blur(10px);
+    border: none;
+    border-radius: 50%;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.3s ease;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.profile-edit-button:hover {
+    background: rgba(255, 255, 255, 0.3);
+    transform: scale(1.1);
+}
+
+.profile-edit-button svg {
+    width: 20px;
+    height: 20px;
+    color: white;
+    filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.2));
+}
+
+/* Курсор на профиле пользователя */
+.user-profile {
+    cursor: pointer;
+    transition: background 0.2s;
+}
+
+.user-profile:hover {
+    background-color: rgba(0, 0, 0, 0.05);
+}
+
+/* Контейнер аватара с hover эффектом */
+.profile-avatar-container {
+    position: absolute;
+    bottom: -65px;
+    left: 50px;
+    width: 130px;
+    height: 130px;
+    border-radius: 50%;
+    cursor: pointer;
+    background: #fff;
+    padding: 5px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+.profile-avatar-container .profile-avatar {
+    position: static;
+    width: 100%;
+    height: 100%;
+    border: none;
+    border-radius: 50%;
+    object-fit: cover;
+    transition: filter 0.3s ease;
+}
+
+/* Overlay для загрузки аватара */
+.profile-avatar-overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    border-radius: 50%;
+    background: rgba(0, 0, 0, 0.7);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    opacity: 0;
+    transition: opacity 0.3s ease;
+    z-index: 2;
+    pointer-events: none;
+}
+
+.profile-avatar-container:hover .profile-avatar-overlay {
+    opacity: 1;
+    pointer-events: auto;
+}
+
+.profile-avatar-overlay svg {
+    width: 32px;
+    height: 32px;
+    color: white;
+    filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.3));
+}
+
+.avatar-upload-text {
+    color: white;
+    font-size: 13px;
+    font-weight: 600;
+    text-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
 }

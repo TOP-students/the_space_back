@@ -22,9 +22,21 @@ document.addEventListener('DOMContentLoaded', async function() {
     const userNameElement = document.querySelector('.user-name');
     const chatListElement = document.querySelector('.chat-list ul');
     const chatMainElement = document.querySelector('.chat-main');
+    const sidebarRight = document.querySelector('.sidebar-right');
+    const sidebarRightContent = document.querySelector('.sidebar-right-content');
+    const sidebarRightToggle = document.getElementById('sidebar-right-toggle');
     const settingsIcon = document.querySelector('.settings-icon');
     const logoutIcon = document.querySelector('.logout-icon');
     const newChatButton = document.querySelector('.new-chat-button');
+    const userProfile = document.querySelector('.user-profile');
+    const profileModal = document.getElementById('profile-modal');
+    const profileModalContent = profileModal?.querySelector('.profile-modal-content');
+
+    // Элементы для загрузки файлов
+    const avatarUploadBtn = document.getElementById('avatar-upload-btn');
+    const bannerUploadBtn = document.getElementById('banner-upload-btn');
+    const avatarFileInput = document.getElementById('avatar-file-input');
+    const bannerFileInput = document.getElementById('banner-file-input');
 
     // Инициализация
     async function init() {
@@ -67,6 +79,7 @@ document.addEventListener('DOMContentLoaded', async function() {
                     content: data.message || data.content,
                     created_at: data.created_at || data.timestamp || new Date().toISOString(),
                     user_nickname: data.user_nickname || data.nickname,
+                    user_avatar_url: data.user_avatar_url,
                     type: data.type || 'text'
                 };
 
@@ -160,6 +173,13 @@ document.addEventListener('DOMContentLoaded', async function() {
     function updateUserProfile() {
         if (state.currentUser) {
             userNameElement.textContent = state.currentUser.nickname;
+
+            // Обновляем аватар в сайдбаре
+            const sidebarAvatar = document.querySelector('.user-avatar');
+            if (sidebarAvatar && state.currentUser.avatar_url) {
+                sidebarAvatar.src = state.currentUser.avatar_url;
+                sidebarAvatar.style.objectFit = 'cover';
+            }
         }
     }
 
@@ -214,12 +234,24 @@ document.addEventListener('DOMContentLoaded', async function() {
             // Генерируем градиент на основе ID чата
             const gradient = generateGradientFromId(space.chat_id || space.id);
 
+            // Проверяем, является ли пользователь администратором
+            const isAdmin = space.admin_id === state.currentUser.id;
+
             li.innerHTML = `
                 <div class="chat-icon" style="background: ${gradient}">${firstLetter}</div>
-                ${space.name}
+                <span class="space-name">${space.name}</span>
+                <button class="space-settings-btn" title="Настройки пространства">⚙️</button>
             `;
 
-            li.addEventListener('click', () => selectSpace(space));
+            // Клик по названию пространства
+            li.querySelector('.space-name').addEventListener('click', () => selectSpace(space));
+
+            // Клик по иконке настроек (доступна всем участникам)
+            li.querySelector('.space-settings-btn').addEventListener('click', (e) => {
+                e.stopPropagation();
+                openSpaceSettings(space);
+            });
+
             chatListElement.appendChild(li);
         });
     }
@@ -230,6 +262,9 @@ document.addEventListener('DOMContentLoaded', async function() {
             Modal.warning('У этого пространства нет чата');
             return;
         }
+
+        // Сохраняем градиент для использования в правой панели
+        space.gradient = generateGradientFromId(space.chat_id || space.id);
 
         // Покидаем предыдущую комнату в WebSocket
         if (state.wsClient && state.currentChatId) {
@@ -272,6 +307,9 @@ document.addEventListener('DOMContentLoaded', async function() {
 
         // Загружаем сообщения
         await loadMessages();
+
+        // Обновляем правую панель с информацией о чате
+        await updateChatInfo();
     }
 
     // Загрузить сообщения
@@ -309,7 +347,7 @@ document.addEventListener('DOMContentLoaded', async function() {
             </div>
             <div class="message-input-container">
                 <form id="message-form">
-                    <input type="text" id="message-input" placeholder="Напишите сообщение..." required autocomplete="off">
+                    <textarea id="message-input" placeholder="Напишите сообщение..." required autocomplete="off" rows="1"></textarea>
                     <button type="button" id="emoji-picker-btn" title="Эмодзи">
                         <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                             <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2"/>
@@ -325,6 +363,7 @@ document.addEventListener('DOMContentLoaded', async function() {
 
         // Подключаем обработчик отправки сообщения
         const messageForm = document.getElementById('message-form');
+        const messageInput = document.getElementById('message-input');
         const sendIcon = document.querySelector('.send-button-icon');
 
         messageForm.addEventListener('submit', handleSendMessage);
@@ -337,6 +376,22 @@ document.addEventListener('DOMContentLoaded', async function() {
             });
         }
 
+        // Обработчик Enter/Shift+Enter для textarea
+        if (messageInput) {
+            messageInput.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    handleSendMessage(e);
+                }
+            });
+
+            // Автоматическое изменение высоты textarea
+            messageInput.addEventListener('input', () => {
+                messageInput.style.height = 'auto';
+                messageInput.style.height = messageInput.scrollHeight + 'px';
+            });
+        }
+
         // Инициализация emoji picker
         initEmojiPicker();
 
@@ -346,6 +401,91 @@ document.addEventListener('DOMContentLoaded', async function() {
 
         // Скроллим вниз
         scrollToBottom();
+    }
+
+    // Обновить информацию о чате в правой панели
+    async function updateChatInfo() {
+        if (!state.currentSpace || !state.currentSpace.id) {
+            // Показываем пустое состояние
+            sidebarRightContent.innerHTML = `
+                <div class="sidebar-right-empty">
+                    <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <path d="M17 21V19C17 17.9391 16.5786 16.9217 15.8284 16.1716C15.0783 15.4214 14.0609 15 13 15H5C3.93913 15 2.92172 15.4214 2.17157 16.1716C1.42143 16.9217 1 17.9391 1 19V21" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        <path d="M9 11C11.2091 11 13 9.20914 13 7C13 4.79086 11.2091 3 9 3C6.79086 3 5 4.79086 5 7C5 9.20914 6.79086 11 9 11Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        <path d="M23 21V19C22.9993 18.1137 22.7044 17.2528 22.1614 16.5523C21.6184 15.8519 20.8581 15.3516 20 15.13" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        <path d="M16 3.13C16.8604 3.35031 17.623 3.85071 18.1676 4.55232C18.7122 5.25392 19.0078 6.11683 19.0078 7.005C19.0078 7.89318 18.7122 8.75608 18.1676 9.45769C17.623 10.1593 16.8604 10.6597 16 10.88" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                    <p>Выберите чат, чтобы увидеть информацию</p>
+                </div>
+            `;
+            return;
+        }
+
+        try {
+            // Загружаем участников
+            const data = await API.getSpaceParticipants(state.currentSpace.id);
+            const participants = data.participants || [];
+
+            // Сортируем: админ первый, остальные по алфавиту
+            const sorted = participants.sort((a, b) => {
+                if (a.id === state.currentSpace.admin_id) return -1;
+                if (b.id === state.currentSpace.admin_id) return 1;
+                return a.nickname.localeCompare(b.nickname);
+            });
+
+            // Получаем градиент чата
+            const gradient = state.currentSpace.gradient || generateGradientFromId(state.currentSpace.chat_id || state.currentSpace.id);
+
+            // Отрисовываем
+            sidebarRightContent.innerHTML = `
+                <div class="chat-info-header" style="background: ${gradient}">
+                    <h3 class="chat-info-title">${state.currentSpace.name}</h3>
+                </div>
+                <div class="chat-info-section">
+                    <div class="chat-info-section-title">Участники (${participants.length})</div>
+                    <div class="chat-members-list">
+                        ${sorted.length > 0 ? sorted.map(member => {
+                            const isAdmin = member.id === state.currentSpace.admin_id;
+                            const firstLetter = member.nickname.charAt(0).toUpperCase();
+                            const gradient = generateGradientFromId(member.id);
+                            const avatarContent = member.avatar_url
+                                ? `<img src="${member.avatar_url}" alt="${member.nickname}" style="width: 100%; height: 100%; object-fit: cover; border-radius: 50%;">`
+                                : firstLetter;
+                            const avatarStyle = member.avatar_url ? '' : `background: ${gradient};`;
+                            return `
+                                <div class="chat-member-item" data-user-id="${member.id}" style="cursor: pointer;">
+                                    <div class="chat-member-avatar" style="${avatarStyle}">${avatarContent}</div>
+                                    <div class="chat-member-info">
+                                        <div class="chat-member-name">${member.nickname}</div>
+                                        <span class="chat-member-role ${isAdmin ? 'admin' : 'member'}">
+                                            ${isAdmin ? 'Администратор' : 'Участник'}
+                                        </span>
+                                    </div>
+                                </div>
+                            `;
+                        }).join('') : '<div class="no-members">Нет участников</div>'}
+                    </div>
+                </div>
+            `;
+
+            // Добавляем обработчики кликов по участникам
+            setTimeout(() => {
+                const memberItems = sidebarRightContent.querySelectorAll('.chat-member-item[data-user-id]');
+                memberItems.forEach(item => {
+                    item.addEventListener('click', () => {
+                        const userId = parseInt(item.dataset.userId);
+                        openProfileModal({ id: userId, nickname: item.querySelector('.chat-member-name').textContent });
+                    });
+                });
+            }, 0);
+        } catch (error) {
+            console.error('Error loading chat info:', error);
+            sidebarRightContent.innerHTML = `
+                <div class="sidebar-right-empty">
+                    <p>Ошибка загрузки информации</p>
+                </div>
+            `;
+        }
     }
 
     // Отрисовать сообщения
@@ -370,6 +510,13 @@ document.addEventListener('DOMContentLoaded', async function() {
                 : (msg.user_nickname ? msg.user_nickname.charAt(0).toUpperCase() : 'U');
             const avatarGradient = generateGradientFromId(msg.user_id);
 
+            // Проверяем, есть ли реальный аватар
+            const avatarUrl = isOwn ? state.currentUser?.avatar_url : (msg.user_avatar_url || msg.user?.avatar_url);
+            const avatarContent = avatarUrl
+                ? `<img src="${avatarUrl}" alt="${authorName}" style="width: 100%; height: 100%; object-fit: cover; border-radius: 50%;">`
+                : avatarLetter;
+            const avatarStyle = avatarUrl ? '' : `background: ${avatarGradient};`;
+
             // Кнопки редактирования и удаления для своих сообщений
             const messageActions = isOwn ? `
                 <div class="message-actions">
@@ -390,7 +537,7 @@ document.addEventListener('DOMContentLoaded', async function() {
 
             return `
                 <div class="message ${isOwn ? 'own-message' : 'other-message'}" data-message-id="${msg.id}">
-                    <div class="message-avatar" style="background: ${avatarGradient}">${avatarLetter}</div>
+                    <div class="message-avatar" data-user-id="${msg.user_id}" style="${avatarStyle} cursor: pointer;" title="Открыть профиль">${avatarContent}</div>
                     <div class="message-body">
                         <div class="message-author">${authorName}</div>
                         <div class="message-content" data-original-content="${escapeHtml(msg.content)}">${escapeHtml(msg.content)}</div>
@@ -427,8 +574,9 @@ document.addEventListener('DOMContentLoaded', async function() {
                 content
             );
 
-            // Очищаем поле ввода сразу
+            // Очищаем поле ввода и сбрасываем высоту
             input.value = '';
+            input.style.height = 'auto';
 
         } else {
             console.warn('WebSocket not connected, using HTTP API fallback');
@@ -442,8 +590,9 @@ document.addEventListener('DOMContentLoaded', async function() {
                 // Перерисовываем чат
                 renderChat();
 
-                // Очищаем поле ввода
+                // Очищаем поле ввода и сбрасываем высоту
                 input.value = '';
+                input.style.height = 'auto';
 
             } catch (error) {
                 console.error('Error sending message:', error);
@@ -486,6 +635,13 @@ document.addEventListener('DOMContentLoaded', async function() {
             : (lastMessage.user_nickname ? lastMessage.user_nickname.charAt(0).toUpperCase() : 'U');
         const avatarGradient = generateGradientFromId(lastMessage.user_id);
 
+        // Проверяем, есть ли реальный аватар
+        const avatarUrl = isOwn ? state.currentUser?.avatar_url : lastMessage.user_avatar_url;
+        const avatarContent = avatarUrl
+            ? `<img src="${avatarUrl}" alt="${authorName}" style="width: 100%; height: 100%; object-fit: cover; border-radius: 50%;">`
+            : avatarLetter;
+        const avatarStyle = avatarUrl ? '' : `background: ${avatarGradient};`;
+
         // Кнопки редактирования и удаления для своих сообщений
         const messageActions = isOwn ? `
             <div class="message-actions">
@@ -508,7 +664,7 @@ document.addEventListener('DOMContentLoaded', async function() {
         messageDiv.className = `message ${isOwn ? 'own-message' : 'other-message'}`;
         messageDiv.dataset.messageId = lastMessage.id;
         messageDiv.innerHTML = `
-            <div class="message-avatar" style="background: ${avatarGradient}">${avatarLetter}</div>
+            <div class="message-avatar" data-user-id="${lastMessage.user_id}" style="${avatarStyle} cursor: pointer;" title="Открыть профиль">${avatarContent}</div>
             <div class="message-body">
                 <div class="message-author">${authorName}</div>
                 <div class="message-content" data-original-content="${escapeHtml(lastMessage.content)}">${escapeHtml(lastMessage.content)}</div>
@@ -534,6 +690,16 @@ document.addEventListener('DOMContentLoaded', async function() {
     // Прикрепить обработчики к кнопкам сообщений
     function attachMessageActionHandlers(container) {
         if (!container) return;
+
+        // Обработчики кликов по аватарам
+        const avatars = container.querySelectorAll('.message-avatar[data-user-id]');
+        avatars.forEach(avatar => {
+            avatar.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const userId = parseInt(avatar.dataset.userId);
+                openProfileModal(userId);
+            });
+        });
 
         // Обработчики кнопок редактирования
         const editButtons = container.querySelectorAll('.edit-btn');
@@ -740,6 +906,155 @@ document.addEventListener('DOMContentLoaded', async function() {
         });
     }
 
+    // Переключение правой боковой панели
+    // Клик по всей панели в свернутом состоянии - разворачиваем
+    if (sidebarRight) {
+        sidebarRight.addEventListener('click', (e) => {
+            // Разворачиваем только если панель свернута и клик не по кнопке
+            if (!sidebarRight.classList.contains('expanded') && e.target !== sidebarRightToggle && !sidebarRightToggle.contains(e.target)) {
+                sidebarRight.classList.add('expanded');
+            }
+        });
+    }
+
+    // Клик по кнопке-стрелке - сворачиваем
+    if (sidebarRightToggle) {
+        sidebarRightToggle.addEventListener('click', (e) => {
+            e.stopPropagation(); // Предотвращаем всплытие к родителю
+            sidebarRight.classList.remove('expanded');
+        });
+    }
+
+    // Модальное окно профиля
+    async function openProfileModal(user = null) {
+        // Если пользователь не передан, открываем профиль текущего пользователя
+        const targetUser = user || state.currentUser;
+
+        if (!targetUser) {
+            console.error('No user to display');
+            return;
+        }
+
+        if (!profileModal) {
+            console.error('profileModal element not found');
+            return;
+        }
+
+        // Если передан только ID или неполные данные, загружаем данные пользователя
+        let userData = targetUser;
+        const needsFullData = typeof targetUser === 'number' ||
+                              (targetUser.id &&
+                               !targetUser.hasOwnProperty('avatar_url') &&
+                               !targetUser.hasOwnProperty('profile_background_url'));
+
+        if (needsFullData) {
+            try {
+                const userId = typeof targetUser === 'number' ? targetUser : targetUser.id;
+                userData = await API.getUserProfile(userId);
+            } catch (error) {
+                console.error('Failed to load user data:', error);
+                Modal.error('Не удалось загрузить данные пользователя');
+                return;
+            }
+        }
+
+        // Заполняем данные профиля
+        const profileName = profileModal.querySelector('.profile-name');
+        const profileEmail = profileModal.querySelector('.profile-email');
+        const profileUserId = profileModal.querySelector('#profile-user-id');
+        const profileNickname = profileModal.querySelector('#profile-nickname');
+        const profileBanner = profileModal.querySelector('.profile-banner');
+        const profileAvatar = profileModal.querySelector('#profile-avatar-img');
+
+        if (profileName) profileName.textContent = userData.nickname;
+
+        // Показываем/скрываем кнопки загрузки только для своего профиля
+        const isOwnProfile = userData.id === state.currentUser?.id;
+        const avatarContainer = document.getElementById('avatar-container');
+
+        if (avatarUploadBtn) avatarUploadBtn.style.display = isOwnProfile ? 'flex' : 'none';
+        if (bannerUploadBtn) bannerUploadBtn.style.display = isOwnProfile ? 'flex' : 'none';
+
+        // Включаем/выключаем hover эффект на аватаре
+        if (avatarContainer) {
+            if (isOwnProfile) {
+                avatarContainer.style.cursor = 'pointer';
+            } else {
+                avatarContainer.style.cursor = 'default';
+            }
+        }
+
+        // Email показываем только для текущего пользователя
+        if (profileEmail) {
+            if (isOwnProfile) {
+                profileEmail.textContent = state.currentUser.email;
+                profileEmail.style.display = 'block';
+            } else {
+                profileEmail.style.display = 'none';
+            }
+        }
+        if (profileUserId) profileUserId.textContent = `#${userData.id}`;
+        if (profileNickname) profileNickname.textContent = userData.nickname;
+
+        // Устанавливаем аватар (реальный или градиент)
+        if (profileAvatar) {
+            if (userData.avatar_url) {
+                profileAvatar.src = userData.avatar_url;
+                profileAvatar.style.background = 'none';
+            } else {
+                profileAvatar.src = 'assets/icons/avatar.svg';
+                const gradient = generateGradientFromId(userData.id);
+                profileAvatar.style.background = gradient;
+            }
+        }
+
+        // Устанавливаем баннер (реальный или градиент)
+        if (profileBanner) {
+            if (userData.profile_background_url) {
+                profileBanner.style.backgroundImage = `url('${userData.profile_background_url}')`;
+                profileBanner.style.backgroundSize = 'cover';
+                profileBanner.style.backgroundPosition = 'center';
+            } else {
+                // Генерируем красивый горизонтальный градиент для баннера
+                const gradient = generateGradientFromId(userData.id);
+                profileBanner.style.background = `linear-gradient(135deg, ${gradient.split('linear-gradient(135deg, ')[1]}`;
+                profileBanner.style.backgroundImage = profileBanner.style.background;
+            }
+        }
+
+        // Показываем модальное окно
+        profileModal.classList.add('show');
+    }
+
+    function closeProfileModal() {
+        if (profileModal) {
+            profileModal.classList.remove('show');
+        }
+    }
+
+    // Открытие профиля при клике на user-profile (свой профиль)
+    if (userProfile) {
+        userProfile.addEventListener('click', () => {
+            openProfileModal();
+        });
+    }
+
+    // Закрытие профиля при клике вне модального окна
+    if (profileModal) {
+        profileModal.addEventListener('click', (e) => {
+            if (e.target === profileModal) {
+                closeProfileModal();
+            }
+        });
+    }
+
+    // Закрытие профиля при нажатии ESC
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && profileModal && profileModal.classList.contains('show')) {
+            closeProfileModal();
+        }
+    });
+
     // Создание новой комнаты
     if (newChatButton) {
         newChatButton.addEventListener('click', async () => {
@@ -747,7 +1062,7 @@ document.addEventListener('DOMContentLoaded', async function() {
 
             if (!formData) return; // Отмена
 
-            const { 'room-name': name, 'room-description': description } = formData;
+            const { name, description, participants } = formData;
 
             if (!name) {
                 Modal.warning('Введите название комнаты');
@@ -756,6 +1071,17 @@ document.addEventListener('DOMContentLoaded', async function() {
 
             try {
                 const newSpace = await API.createSpace(name, description);
+
+                // Если указаны участники, добавляем их
+                if (participants && participants.length > 0) {
+                    for (const participant of participants) {
+                        try {
+                            await API.addUserToSpace(newSpace.id, participant.id);
+                        } catch (err) {
+                            console.warn(`Failed to add user ${participant.nickname}:`, err);
+                        }
+                    }
+                }
 
                 // Перезагружаем список комнат
                 await loadSpaces();
@@ -806,6 +1132,394 @@ document.addEventListener('DOMContentLoaded', async function() {
             }
         }
     }
+
+    // === УПРАВЛЕНИЕ ПРОСТРАНСТВОМ ===
+
+    async function openSpaceSettings(space) {
+        const isAdmin = space.admin_id === state.currentUser.id;
+
+        // Кнопки для всех пользователей
+        const commonButtons = `
+            <button class="space-action-btn" onclick="window.chatApp.showParticipants(${space.id})">
+                <span class="action-icon">👥</span>
+                <div class="action-text">
+                    <div class="action-title">Список участников</div>
+                    <div class="action-desc">Просмотр и управление</div>
+                </div>
+            </button>
+        `;
+
+        // Кнопки только для админа
+        const adminButtons = `
+            <button class="space-action-btn" onclick="window.chatApp.renameSpace(${space.id})">
+                <span class="action-icon">✏️</span>
+                <div class="action-text">
+                    <div class="action-title">Изменить название</div>
+                    <div class="action-desc">Переименовать пространство</div>
+                </div>
+            </button>
+            <button class="space-action-btn" onclick="window.chatApp.addUserToSpace(${space.id})">
+                <span class="action-icon">👤</span>
+                <div class="action-text">
+                    <div class="action-title">Добавить пользователя</div>
+                    <div class="action-desc">Пригласить по нику или ID</div>
+                </div>
+            </button>
+            <button class="space-action-btn space-action-danger" onclick="window.chatApp.deleteSpace(${space.id})">
+                <span class="action-icon">🗑️</span>
+                <div class="action-text">
+                    <div class="action-title">Удалить пространство</div>
+                    <div class="action-desc">Удалить навсегда со всеми сообщениями</div>
+                </div>
+            </button>
+        `;
+
+        // Кнопка для обычных участников
+        const userButtons = `
+            <button class="space-action-btn space-action-warning" onclick="window.chatApp.leaveSpace(${space.id})">
+                <span class="action-icon">🚪</span>
+                <div class="action-text">
+                    <div class="action-title">Покинуть пространство</div>
+                    <div class="action-desc">Выйти из этой комнаты</div>
+                </div>
+            </button>
+        `;
+
+        const content = `
+            <div class="space-settings-menu">
+                <div class="space-settings-header">
+                    <div class="space-icon-large">${space.name.charAt(0).toUpperCase()}</div>
+                    <h3>${space.name}</h3>
+                </div>
+                <div class="space-settings-actions">
+                    ${commonButtons}
+                    ${isAdmin ? adminButtons : userButtons}
+                </div>
+            </div>
+        `;
+
+        await Modal.custom(content);
+    }
+
+    async function renameSpace(spaceId) {
+        const currentSpace = state.spaces.find(s => s.id === spaceId);
+        if (!currentSpace) return;
+
+        const newName = await Modal.prompt('Введите новое название пространства', currentSpace.name);
+        if (!newName || newName === currentSpace.name) return;
+
+        try {
+            await API.updateSpaceName(spaceId, newName);
+            await Modal.success('Название обновлено!');
+            await loadSpaces();
+        } catch (error) {
+            await Modal.error('Ошибка: ' + error.message);
+        }
+    }
+
+    async function addUserToSpace(spaceId) {
+        const userIdentifier = await Modal.prompt('Введите никнейм или ID пользователя');
+        if (!userIdentifier) return;
+
+        try {
+            const result = await API.addUserToSpace(spaceId, userIdentifier);
+            await Modal.success(`Пользователь ${result.user.nickname} добавлен!`);
+        } catch (error) {
+            await Modal.error('Ошибка: ' + error.message);
+        }
+    }
+
+    async function showParticipants(spaceId) {
+        try {
+            const data = await API.getSpaceParticipants(spaceId);
+            const participants = data.participants;
+
+            if (participants.length === 0) {
+                await Modal.info('В этом пространстве пока нет участников');
+                return;
+            }
+
+            const space = state.spaces.find(s => s.id === spaceId);
+            const isAdmin = space && space.admin_id === state.currentUser.id;
+
+            const content = `
+                <div class="participants-container">
+                    <div class="participants-header">
+                        <span class="participants-count">${participants.length} участник${participants.length % 10 === 1 && participants.length !== 11 ? '' : participants.length % 10 >= 2 && participants.length % 10 <= 4 && (participants.length < 10 || participants.length > 20) ? 'а' : 'ов'}</span>
+                    </div>
+                    <div class="participants-list">
+                        ${participants.map(p => {
+                            const isSpaceAdmin = p.id === space.admin_id;
+                            const firstLetter = p.nickname.charAt(0).toUpperCase();
+                            return `
+                                <div class="participant-card">
+                                    <div class="participant-avatar">${firstLetter}</div>
+                                    <div class="participant-info">
+                                        <div class="participant-name">${p.nickname}</div>
+                                        ${isSpaceAdmin ? '<div class="participant-badge admin-badge">Администратор</div>' : '<div class="participant-badge member-badge">Участник</div>'}
+                                    </div>
+                                    ${isAdmin && p.id !== state.currentUser.id ? `
+                                        <button class="participant-kick-btn" onclick="window.chatApp.kickUserFromSpace(${spaceId}, ${p.id})" title="Удалить">
+                                            ❌
+                                        </button>
+                                    ` : ''}
+                                </div>
+                            `;
+                        }).join('')}
+                    </div>
+                </div>
+            `;
+
+            await Modal.custom(content);
+        } catch (error) {
+            await Modal.error('Ошибка: ' + error.message);
+        }
+    }
+
+    async function kickUserFromSpace(spaceId, userId) {
+        const confirm = await Modal.confirm('Вы уверены, что хотите удалить этого пользователя?');
+        if (!confirm) return;
+
+        try {
+            await API.kickUser(spaceId, userId);
+
+            // Обновляем список участников без закрытия окна
+            await refreshParticipantsList(spaceId);
+
+            // Показываем уведомление об успехе
+            await Modal.success('Пользователь удален из пространства');
+        } catch (error) {
+            await Modal.error('Ошибка: ' + error.message);
+        }
+    }
+
+    async function refreshParticipantsList(spaceId) {
+        try {
+            const data = await API.getSpaceParticipants(spaceId);
+            const participants = data.participants;
+
+            const space = state.spaces.find(s => s.id === spaceId);
+            const isAdmin = space && space.admin_id === state.currentUser.id;
+
+            // Находим контейнер участников в текущем модальном окне
+            const participantsContainer = document.querySelector('.participants-container');
+            if (!participantsContainer) return;
+
+            // Обновляем только контент внутри контейнера
+            const newContent = `
+                <div class="participants-header">
+                    <span class="participants-count">${participants.length} участник${participants.length % 10 === 1 && participants.length !== 11 ? '' : participants.length % 10 >= 2 && participants.length % 10 <= 4 && (participants.length < 10 || participants.length > 20) ? 'а' : 'ов'}</span>
+                </div>
+                <div class="participants-list">
+                    ${participants.map(p => {
+                        const isSpaceAdmin = p.id === space.admin_id;
+                        const firstLetter = p.nickname.charAt(0).toUpperCase();
+                        return `
+                            <div class="participant-card">
+                                <div class="participant-avatar">${firstLetter}</div>
+                                <div class="participant-info">
+                                    <div class="participant-name">${p.nickname}</div>
+                                    ${isSpaceAdmin ? '<div class="participant-badge admin-badge">Администратор</div>' : '<div class="participant-badge member-badge">Участник</div>'}
+                                </div>
+                                ${isAdmin && p.id !== state.currentUser.id ? `
+                                    <button class="participant-kick-btn" onclick="window.chatApp.kickUserFromSpace(${spaceId}, ${p.id})" title="Удалить">
+                                        ❌
+                                    </button>
+                                ` : ''}
+                            </div>
+                        `;
+                    }).join('')}
+                </div>
+            `;
+
+            participantsContainer.innerHTML = newContent;
+        } catch (error) {
+            console.error('Error refreshing participants:', error);
+        }
+    }
+
+    async function leaveSpace(spaceId) {
+        const space = state.spaces.find(s => s.id === spaceId);
+        if (!space) return;
+
+        const confirm = await Modal.confirm(
+            `Вы уверены, что хотите покинуть пространство "${space.name}"?`,
+            'Покинуть пространство',
+            { danger: true, confirmText: 'Покинуть' }
+        );
+
+        if (!confirm) return;
+
+        try {
+            await API.leaveSpace(spaceId);
+
+            // Закрываем все модальные окна
+            Modal.closeAll();
+
+            // Обновляем список пространств
+            await loadSpaces();
+
+            // Если покинутое пространство было выбрано, очищаем чат
+            if (state.currentChatId === space.chat_id) {
+                state.currentChatId = null;
+                state.messages = [];
+                renderChat();
+            }
+
+            await Modal.success('Вы покинули пространство');
+        } catch (error) {
+            await Modal.error('Ошибка при выходе: ' + error.message);
+        }
+    }
+
+    async function deleteSpace(spaceId) {
+        const space = state.spaces.find(s => s.id === spaceId);
+        if (!space) return;
+
+        const confirm = await Modal.confirm(
+            `Вы уверены, что хотите удалить пространство "${space.name}"? Все сообщения будут удалены безвозвратно!`,
+            'Удалить пространство',
+            { danger: true, confirmText: 'Удалить' }
+        );
+
+        if (!confirm) return;
+
+        try {
+            await API.deleteSpace(spaceId);
+
+            // Закрываем все модальные окна
+            Modal.closeAll();
+
+            // Обновляем список пространств
+            await loadSpaces();
+
+            // Если удалённое пространство было выбрано, очищаем чат
+            if (state.currentChatId === space.chat_id) {
+                state.currentChatId = null;
+                state.messages = [];
+                renderChat();
+            }
+
+            await Modal.success('Пространство успешно удалено');
+        } catch (error) {
+            await Modal.error('Ошибка при удалении: ' + error.message);
+        }
+    }
+
+    // === ЗАГРУЗКА АВАТАРА И БАННЕРА ===
+
+    // Обработчики для загрузки аватара
+    if (avatarUploadBtn && avatarFileInput) {
+        avatarUploadBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            avatarFileInput.click();
+        });
+
+        avatarFileInput.addEventListener('change', async (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            // Проверка типа файла
+            if (!file.type.startsWith('image/')) {
+                Modal.error('Пожалуйста, выберите изображение');
+                return;
+            }
+
+            // Проверка размера (макс 5MB)
+            if (file.size > 5 * 1024 * 1024) {
+                Modal.error('Файл слишком большой. Максимум 5MB');
+                return;
+            }
+
+            try {
+                // Загружаем файл
+                const updatedUser = await API.uploadAvatar(file);
+
+                // Обновляем state
+                state.currentUser = updatedUser;
+
+                // Обновляем UI
+                const profileAvatar = document.querySelector('#profile-avatar-img');
+                if (profileAvatar && updatedUser.avatar_url) {
+                    profileAvatar.src = updatedUser.avatar_url;
+                    profileAvatar.style.background = 'none';
+                }
+
+                // Обновляем аватар в сайдбаре
+                const sidebarAvatar = document.querySelector('.user-avatar');
+                if (sidebarAvatar && updatedUser.avatar_url) {
+                    sidebarAvatar.src = updatedUser.avatar_url;
+                }
+
+                Modal.success('Аватар успешно обновлен!');
+            } catch (error) {
+                console.error('Error uploading avatar:', error);
+                Modal.error('Ошибка загрузки: ' + error.message);
+            } finally {
+                // Сбрасываем input для возможности повторной загрузки того же файла
+                avatarFileInput.value = '';
+            }
+        });
+    }
+
+    // Обработчики для загрузки баннера
+    if (bannerUploadBtn && bannerFileInput) {
+        bannerUploadBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            bannerFileInput.click();
+        });
+
+        bannerFileInput.addEventListener('change', async (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            // Проверка типа файла
+            if (!file.type.startsWith('image/')) {
+                Modal.error('Пожалуйста, выберите изображение');
+                return;
+            }
+
+            // Проверка размера (макс 10MB)
+            if (file.size > 10 * 1024 * 1024) {
+                Modal.error('Файл слишком большой. Максимум 10MB');
+                return;
+            }
+
+            try {
+                // Загружаем файл
+                const updatedUser = await API.uploadBanner(file);
+
+                // Обновляем state
+                state.currentUser = updatedUser;
+
+                // Обновляем UI
+                const profileBanner = document.querySelector('.profile-banner');
+                if (profileBanner && updatedUser.profile_background_url) {
+                    profileBanner.style.backgroundImage = `url('${updatedUser.profile_background_url}')`;
+                    profileBanner.style.backgroundSize = 'cover';
+                    profileBanner.style.backgroundPosition = 'center';
+                }
+
+                Modal.success('Баннер успешно обновлен!');
+            } catch (error) {
+                console.error('Error uploading banner:', error);
+                Modal.error('Ошибка загрузки: ' + error.message);
+            } finally {
+                // Сбрасываем input для возможности повторной загрузки того же файла
+                bannerFileInput.value = '';
+            }
+        });
+    }
+
+    // Экспортируем функции в window для доступа из HTML
+    window.chatApp = {
+        renameSpace,
+        addUserToSpace,
+        showParticipants,
+        kickUserFromSpace,
+        leaveSpace,
+        deleteSpace
+    };
 
     // Запускаем приложение
     init();

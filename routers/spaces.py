@@ -32,20 +32,27 @@ async def get_all_spaces(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """Получить список всех комнат с chat_id"""
-    from models.base import Chat
-    
-    spaces = db.query(Space).all()
-    
-    # chat_id для каждой комнаты
+    """Получить список комнат, где пользователь является активным участником"""
+    from models.base import Chat, ChatParticipant
+
+    # Получаем только те пространства, где пользователь - активный участник
+    spaces = db.query(Space).join(
+        Chat, Space.id == Chat.space_id
+    ).join(
+        ChatParticipant, Chat.id == ChatParticipant.chat_id
+    ).filter(
+        ChatParticipant.user_id == current_user.id,
+        ChatParticipant.is_active == True
+    ).all()
+
+    # Добавляем chat_id для каждой комнаты
     result = []
     for space in spaces:
-        # групповой чат по ID (если ID совпадают с пространством)
         chat = db.query(Chat).filter(
-            Chat.id == space.id,
+            Chat.space_id == space.id,
             Chat.type == "group"
         ).first()
-        
+
         result.append({
             "id": space.id,
             "name": space.name,
@@ -53,7 +60,7 @@ async def get_all_spaces(
             "admin_id": space.admin_id,
             "chat_id": chat.id if chat else None
         })
-    
+
     return result
 
 @router.get("/{space_id}", response_model=SpaceOut)
@@ -106,7 +113,8 @@ async def get_participants(
             {
                 "id": user.id,
                 "nickname": user.nickname,
-                "status": user.status
+                "status": user.status,
+                "avatar_url": user.avatar_url
             } for user in participants
         ]
     }
@@ -198,3 +206,139 @@ async def assign_role(
     
     role_repo.assign_to_user(user_id, role_id)
     return {"message": "Роль успешно назначена"}
+
+@router.post("/{space_id}/add-user")
+async def add_user_to_space(
+    space_id: int,
+    user_identifier: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Добавить пользователя в пространство по никнейму или ID"""
+    space_repo = SpaceRepository(db)
+
+    # Проверка прав - только админ может добавлять
+    space = space_repo.get_by_id(space_id)
+    if not space or space.admin_id != current_user.id:
+        raise HTTPException(status_code=403, detail="У вас нет прав на добавление пользователей")
+
+    # Ищем пользователя по ID или никнейму
+    user_to_add = None
+    if user_identifier.isdigit():
+        user_to_add = db.query(User).filter(User.id == int(user_identifier)).first()
+    else:
+        user_to_add = db.query(User).filter(User.nickname == user_identifier).first()
+
+    if not user_to_add:
+        raise HTTPException(status_code=404, detail="Пользователь не найден")
+
+    # Добавляем пользователя в пространство
+    result = space_repo.join(space_id, user_to_add.id)
+    if not result:
+        raise HTTPException(status_code=404, detail="Пространство не найдено")
+
+    return {
+        "message": "Пользователь добавлен в пространство",
+        "user": {
+            "id": user_to_add.id,
+            "nickname": user_to_add.nickname
+        }
+    }
+
+@router.patch("/{space_id}/name")
+async def update_space_name(
+    space_id: int,
+    new_name: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Изменить название пространства"""
+    space_repo = SpaceRepository(db)
+
+    # Проверка прав - только админ может изменять название
+    space = space_repo.get_by_id(space_id)
+    if not space or space.admin_id != current_user.id:
+        raise HTTPException(status_code=403, detail="У вас нет прав на изменение названия")
+
+    # Обновляем название
+    space.name = new_name
+    db.commit()
+
+    return {
+        "message": "Название пространства обновлено",
+        "space": {
+            "id": space.id,
+            "name": space.name
+        }
+    }
+
+@router.post("/{space_id}/leave")
+async def leave_space(
+    space_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Покинуть пространство (только для обычных участников, не админов)"""
+    space_repo = SpaceRepository(db)
+
+    # Проверяем существование пространства
+    space = space_repo.get_by_id(space_id)
+    if not space:
+        raise HTTPException(status_code=404, detail="Пространство не найдено")
+
+    # Админ не может покинуть свое пространство
+    if space.admin_id == current_user.id:
+        raise HTTPException(status_code=403, detail="Администратор не может покинуть пространство. Удалите пространство или передайте права администратора.")
+
+    # Удаляем пользователя из участников (kick)
+    space_repo.kick(space_id, current_user.id)
+
+    return {"message": "Вы покинули пространство"}
+
+@router.delete("/{space_id}/delete")
+async def delete_space(
+    space_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Удалить пространство (только админ)"""
+    from models.base import Chat, Message, ChatParticipant, Attachment
+
+    space_repo = SpaceRepository(db)
+
+    # Проверка прав - только админ может удалять
+    space = space_repo.get_by_id(space_id)
+    if not space:
+        raise HTTPException(status_code=404, detail="Пространство не найдено")
+
+    if space.admin_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Только администратор может удалить пространство")
+
+    try:
+        from models.base import Role, UserRole, Ban
+
+        # Удаляем баны, связанные с пространством (у них нет CASCADE)
+        db.query(Ban).filter(Ban.space_id == space_id).delete()
+
+        # Удаляем роли пространства (это также удалит UserRole через CASCADE)
+        db.query(Role).filter(Role.space_id == space_id).delete()
+
+        # Находим связанный групповой чат
+        chat = db.query(Chat).filter(
+            Chat.space_id == space_id,
+            Chat.type == "group"
+        ).first()
+
+        if chat:
+            # Удаляем чат (это каскадно удалит Messages, Attachments, ChatParticipants)
+            db.delete(chat)
+
+        # Удаляем само пространство
+        db.delete(space)
+        db.commit()
+
+        return {"message": "Пространство успешно удалено"}
+    except Exception as e:
+        db.rollback()
+        print(f"Error deleting space: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Ошибка при удалении: {str(e)}")
