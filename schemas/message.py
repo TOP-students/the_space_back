@@ -31,6 +31,7 @@ class MessageOut(BaseModel):
     user_nickname: Optional[str] = None  # для совместимости с фронтендом
     attachment: AttachmentOut | None = None
     reactions: Optional[list] = None
+    my_reaction: Optional[str] = None
 
     class Config:
         from_attributes = True

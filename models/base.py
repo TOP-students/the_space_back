@@ -83,7 +83,8 @@ class Message(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     
     user = relationship("User", foreign_keys=[user_id], lazy="joined")
-    
+    attachment = relationship("Attachment", foreign_keys=[attachment_id], lazy="joined")
+
     __table_args__ = (Index('ix_messages_chat_created_at', 'chat_id', 'created_at'),)
 
 class Attachment(Base):

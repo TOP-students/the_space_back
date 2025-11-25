@@ -59,7 +59,9 @@ class MessageRepository:
         return self.db.query(Message).filter(Message.id == message_id).first()
 
     def get_by_chat(self, chat_id: int, limit: int = 50, offset: int = 0):
-        messages = self.db.query(Message).join(User).filter(
+        messages = self.db.query(Message).options(
+            joinedload(Message.attachment)
+        ).join(User).filter(
             Message.chat_id == chat_id,
             Message.is_deleted == False
         ).order_by(Message.created_at.desc()).offset(offset).limit(limit).all()[::-1]
@@ -72,7 +74,9 @@ class MessageRepository:
         return messages
 
     def search_by_chat(self, chat_id: int, query: str, limit: int = 50, offset: int = 0):
-        messages = self.db.query(Message).filter(
+        messages = self.db.query(Message).options(
+            joinedload(Message.attachment)
+        ).filter(
             Message.chat_id == chat_id,
             Message.is_deleted == False,
             Message.content.ilike(f"%{query}%")

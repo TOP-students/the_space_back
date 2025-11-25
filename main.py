@@ -69,6 +69,10 @@ async def root():
 async def health_check():
     return {"status": "ok"}
 
+# Сохраняем глобальный инстанс Socket.IO
+from utils.socketio_instance import set_sio
+set_sio(sio)
+
 # Импорт обработчиков Socket.IO (после создания sio)
 from utils.socketio_handlers import register_socketio_handlers
 register_socketio_handlers(sio)
@@ -77,4 +81,4 @@ register_socketio_handlers(sio)
 app_with_socketio = socketio.ASGIApp(sio, app)
 
 if __name__ == "__main__":
-    uvicorn.run(app_with_socketio, host="0.0.0.0", port=8000)
+    uvicorn.run(app_with_socketio, host="0.0.0.0", port=8080)

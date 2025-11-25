@@ -80,7 +80,10 @@ document.addEventListener('DOMContentLoaded', async function() {
                     created_at: data.created_at || data.timestamp || new Date().toISOString(),
                     user_nickname: data.user_nickname || data.nickname,
                     user_avatar_url: data.user_avatar_url,
-                    type: data.type || 'text'
+                    type: data.type || 'text',
+                    attachment: data.attachment || null,
+                    reactions: data.reactions || [],
+                    my_reaction: data.my_reaction || null
                 };
 
                 state.messages.push(message);
@@ -165,6 +168,37 @@ document.addEventListener('DOMContentLoaded', async function() {
                 }
             } else {
                 console.log('Room mismatch, ignoring delete');
+            }
+        });
+
+        // Обработчик обновления реакций
+        state.wsClient.socket.on('reaction_updated', (data) => {
+            console.log('WS: Reaction updated', data);
+
+            if (data.room_id == state.currentChatId || data.chat_id == state.currentChatId) {
+                // Обновляем реакции в локальном стейте
+                const message = state.messages.find(m => m.id == data.message_id);
+                if (message) {
+                    message.reactions = data.reactions;
+
+                    // Вычисляем my_reaction на основе reactions
+                    message.my_reaction = null;
+                    for (const reaction of data.reactions) {
+                        const userReacted = reaction.users.find(u => u.id === state.currentUser.id);
+                        if (userReacted) {
+                            message.my_reaction = reaction.reaction;
+                            break;
+                        }
+                    }
+
+                    console.log('Updated reactions in state:', message.reactions, 'my_reaction:', message.my_reaction);
+                }
+
+                // Обновляем UI - перерисовываем весь чат
+                renderChat();
+                console.log('Reactions updated in UI');
+            } else {
+                console.log('Room mismatch, ignoring reaction update');
             }
         });
     }
@@ -347,6 +381,11 @@ document.addEventListener('DOMContentLoaded', async function() {
             </div>
             <div class="message-input-container">
                 <form id="message-form">
+                    <button type="button" id="attach-file-btn" class="attach-file-btn" title="Прикрепить файл">
+                        <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                            <path d="M21.44 11.05L12.25 20.24C11.1242 21.3658 9.59723 21.9983 8.005 21.9983C6.41277 21.9983 4.88579 21.3658 3.76 20.24C2.63421 19.1142 2.00166 17.5872 2.00166 15.995C2.00166 14.4028 2.63421 12.8758 3.76 11.75L12.33 3.18C13.0806 2.42944 14.0967 2.00562 15.155 2.00562C16.2133 2.00562 17.2294 2.42944 17.98 3.18C18.7306 3.93056 19.1544 4.94667 19.1544 6.005C19.1544 7.06333 18.7306 8.07944 17.98 8.83L9.41 17.4C9.03471 17.7753 8.52664 17.9872 7.995 17.9872C7.46336 17.9872 6.95529 17.7753 6.58 17.4C6.20471 17.0247 5.99279 16.5166 5.99279 15.985C5.99279 15.4534 6.20471 14.9453 6.58 14.57L15.07 6.07" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                    </button>
                     <textarea id="message-input" placeholder="Напишите сообщение..." required autocomplete="off" rows="1"></textarea>
                     <button type="button" id="emoji-picker-btn" title="Эмодзи">
                         <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -395,9 +434,15 @@ document.addEventListener('DOMContentLoaded', async function() {
         // Инициализация emoji picker
         initEmojiPicker();
 
+        // Инициализация прикрепления файлов
+        initFileAttachment();
+
         // Добавляем обработчики для кнопок редактирования/удаления
         const container = document.getElementById('messages-container');
         attachMessageActionHandlers(container);
+
+        // Добавляем обработчики для реакций
+        attachReactionHandlers(container);
 
         // Скроллим вниз
         scrollToBottom();
@@ -535,12 +580,20 @@ document.addEventListener('DOMContentLoaded', async function() {
                 </div>
             ` : '';
 
+            // Рендер вложения если есть
+            const attachmentHTML = msg.attachment ? AttachmentUtils.renderAttachment(msg.attachment, msg.type) : '';
+
+            // Рендер реакций если есть
+            const reactionsHTML = AttachmentUtils.renderReactions(msg.reactions || [], msg.my_reaction, msg.id);
+
             return `
                 <div class="message ${isOwn ? 'own-message' : 'other-message'}" data-message-id="${msg.id}">
                     <div class="message-avatar" data-user-id="${msg.user_id}" style="${avatarStyle} cursor: pointer;" title="Открыть профиль">${avatarContent}</div>
                     <div class="message-body">
                         <div class="message-author">${authorName}</div>
                         <div class="message-content" data-original-content="${escapeHtml(msg.content)}">${escapeHtml(msg.content)}</div>
+                        ${attachmentHTML}
+                        ${reactionsHTML}
                         <div class="message-time">${time}</div>
                         ${messageActions}
                     </div>
@@ -660,6 +713,12 @@ document.addEventListener('DOMContentLoaded', async function() {
             </div>
         ` : '';
 
+        // Рендер вложения если есть
+        const attachmentHTML = lastMessage.attachment ? AttachmentUtils.renderAttachment(lastMessage.attachment, lastMessage.type) : '';
+
+        // Рендер реакций если есть
+        const reactionsHTML = AttachmentUtils.renderReactions(lastMessage.reactions || [], lastMessage.my_reaction, lastMessage.id);
+
         const messageDiv = document.createElement('div');
         messageDiv.className = `message ${isOwn ? 'own-message' : 'other-message'}`;
         messageDiv.dataset.messageId = lastMessage.id;
@@ -668,6 +727,8 @@ document.addEventListener('DOMContentLoaded', async function() {
             <div class="message-body">
                 <div class="message-author">${authorName}</div>
                 <div class="message-content" data-original-content="${escapeHtml(lastMessage.content)}">${escapeHtml(lastMessage.content)}</div>
+                ${attachmentHTML}
+                ${reactionsHTML}
                 <div class="message-time">${time}</div>
                 ${messageActions}
             </div>
@@ -683,6 +744,9 @@ document.addEventListener('DOMContentLoaded', async function() {
 
         // Добавляем обработчики для кнопок
         attachMessageActionHandlers(messageDiv);
+
+        // Добавляем обработчики для реакций и изображений
+        attachReactionHandlers(messageDiv);
 
         scrollToBottom();
     }
@@ -1509,6 +1573,257 @@ document.addEventListener('DOMContentLoaded', async function() {
                 bannerFileInput.value = '';
             }
         });
+    }
+
+    // === ПРИКРЕПЛЕНИЕ ФАЙЛОВ ===
+
+    // Флаг для предотвращения множественной инициализации
+    let fileAttachmentInitialized = false;
+
+    function initFileAttachment() {
+        const attachBtn = document.getElementById('attach-file-btn');
+        const fileInput = document.getElementById('chat-file-input');
+
+        if (!attachBtn || !fileInput) return;
+
+        // Если уже инициализировано, удаляем старый input и создаем новый
+        if (fileAttachmentInitialized) {
+            // Клонируем input для удаления всех старых обработчиков
+            const newFileInput = fileInput.cloneNode(true);
+            fileInput.parentNode.replaceChild(newFileInput, fileInput);
+            // Обновляем ссылку
+            const updatedFileInput = document.getElementById('chat-file-input');
+
+            // Добавляем обработчик на кнопку
+            const newAttachBtn = document.getElementById('attach-file-btn');
+            newAttachBtn.addEventListener('click', () => {
+                updatedFileInput.click();
+            });
+
+            // Добавляем обработчик на input
+            updatedFileInput.addEventListener('change', handleFileUpload);
+            return;
+        }
+
+        fileAttachmentInitialized = true;
+
+        attachBtn.addEventListener('click', () => {
+            fileInput.click();
+        });
+
+        fileInput.addEventListener('change', handleFileUpload);
+    }
+
+    async function handleFileUpload(e) {
+        const fileInput = e.target;
+        const file = fileInput.files[0];
+        if (!file) return;
+
+        try {
+            // Валидация файла
+            AttachmentUtils.validateFile(file);
+
+            // Определяем тип файла
+            const fileType = AttachmentUtils.getFileType(file);
+            if (!fileType) {
+                throw new Error('Неподдерживаемый тип файла');
+            }
+
+            // Показываем индикатор загрузки
+            const messageForm = document.getElementById('message-form');
+            const progressDiv = document.createElement('div');
+            progressDiv.className = 'upload-progress';
+            progressDiv.innerHTML = `
+                <div class="spinner"></div>
+                <span>Загрузка ${file.name}...</span>
+            `;
+            messageForm.appendChild(progressDiv);
+
+            // Загружаем файл
+            let uploadedMessage;
+            if (fileType === 'image') {
+                uploadedMessage = await API.uploadImage(state.currentChatId, file);
+            } else if (fileType === 'audio') {
+                uploadedMessage = await API.uploadAudio(state.currentChatId, file);
+            } else if (fileType === 'document') {
+                uploadedMessage = await API.uploadDocument(state.currentChatId, file);
+            }
+
+            // Добавляем сообщение в список
+            state.messages.push(uploadedMessage);
+            updateMessagesInChat();
+
+            // Убираем индикатор загрузки
+            progressDiv.remove();
+
+            // Очищаем input
+            fileInput.value = '';
+
+            await Modal.success('Файл успешно загружен');
+
+        } catch (error) {
+            console.error('File upload error:', error);
+            await Modal.error('Ошибка загрузки файла: ' + error.message);
+            fileInput.value = '';
+        }
+    }
+
+    // === РЕАКЦИИ ===
+
+    function attachReactionHandlers(container) {
+        if (!container) return;
+
+        // Обработчики кликов по существующим реакциям (toggle)
+        const reactionItems = container.querySelectorAll('.reaction-item');
+        reactionItems.forEach(btn => {
+            btn.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                const messageId = btn.dataset.messageId;
+                const reaction = btn.dataset.reaction;
+                await handleToggleReaction(messageId, reaction);
+            });
+        });
+
+        // Обработчики кликов по сообщениям для открытия picker реакций
+        const messages = container.querySelectorAll('.message');
+        messages.forEach(messageEl => {
+            // Кликаем на message-body, чтобы не конфликтовать с аватаром и кнопками
+            const messageBody = messageEl.querySelector('.message-body');
+            if (!messageBody) return;
+
+            messageBody.addEventListener('click', (e) => {
+                // Игнорируем клики по кнопкам редактирования/удаления и другим интерактивным элементам
+                if (e.target.closest('.message-action-btn') ||
+                    e.target.closest('.message-edit-form') ||
+                    e.target.closest('.reaction-item') ||
+                    e.target.closest('.attachment-image') ||
+                    e.target.closest('audio') ||
+                    e.target.closest('a') ||
+                    e.target.closest('button')) {
+                    return;
+                }
+
+                const messageId = messageEl.dataset.messageId;
+                showReactionPicker(messageEl, messageId);
+            });
+        });
+
+        // Обработчики кликов по изображениям для lightbox
+        const images = container.querySelectorAll('.attachment-image');
+        images.forEach(img => {
+            img.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const imageUrl = img.dataset.url;
+                AttachmentUtils.openImageLightbox(imageUrl);
+            });
+        });
+    }
+
+    async function handleToggleReaction(messageId, reaction) {
+        try {
+            const result = await API.addReaction(state.currentChatId, messageId, reaction);
+
+            // Обновляем реакции в локальном сообщении
+            const message = state.messages.find(m => m.id == messageId);
+            if (message) {
+                message.reactions = result.reactions;
+                message.my_reaction = result.my_reaction;
+            }
+
+            // Перерисовываем чат
+            renderChat();
+
+        } catch (error) {
+            console.error('Reaction error:', error);
+            await Modal.error('Ошибка добавления реакции');
+        }
+    }
+
+    function showReactionPicker(element, messageId) {
+        // Убираем старый picker если есть
+        const oldPicker = document.querySelector('.reaction-picker-popup');
+        if (oldPicker) oldPicker.remove();
+
+        // Создаем popup с расширенным набором реакций
+        const picker = document.createElement('div');
+        picker.className = 'reaction-picker-popup';
+
+        // Расширенный набор эмодзи (6 рядов по 7)
+        const reactions = [
+            // Часто используемые
+            '👍', '❤️', '😂', '😮', '😢', '😡', '🔥',
+            // Эмоции
+            '😊', '😍', '🥰', '😘', '😎', '🤔', '🙄',
+            // Жесты
+            '👏', '🙌', '🤝', '👋', '✌️', '🤞', '💪',
+            // Праздники
+            '🎉', '🎊', '🎈', '🎁', '🎂', '🥳', '🎆',
+            // Разное
+            '⭐', '✨', '💯', '🏆', '✅', '❌', '💬',
+            // Природа
+            '🌟', '☀️', '🌈', '⚡', '🔴', '🟢', '🔵'
+        ];
+
+        reactions.forEach(emoji => {
+            const btn = document.createElement('button');
+            btn.textContent = emoji;
+            btn.addEventListener('click', async () => {
+                await handleToggleReaction(messageId, emoji);
+                picker.remove();
+            });
+            picker.appendChild(btn);
+        });
+
+        document.body.appendChild(picker);
+
+        // Позиционируем относительно элемента (используя фиксированное позиционирование)
+        const rect = element.getBoundingClientRect();
+        const pickerRect = picker.getBoundingClientRect();
+
+        // Определяем где больше места - сверху или снизу
+        const spaceBelow = window.innerHeight - rect.bottom;
+        const spaceAbove = rect.top;
+
+        if (spaceBelow >= pickerRect.height + 10) {
+            // Размещаем снизу - небольшой отступ от сообщения
+            picker.style.top = `${rect.bottom + 5}px`;
+            picker.style.bottom = 'auto';
+        } else if (spaceAbove >= pickerRect.height + 10) {
+            // Размещаем сверху - прямо над сообщением
+            picker.style.top = `${rect.top - pickerRect.height - 5}px`;
+            picker.style.bottom = 'auto';
+        } else {
+            // Центрируем по вертикали
+            picker.style.top = `${Math.max(10, (window.innerHeight - pickerRect.height) / 2)}px`;
+            picker.style.bottom = 'auto';
+        }
+
+        // Горизонтальное позиционирование
+        const leftPos = Math.min(
+            rect.left,
+            window.innerWidth - pickerRect.width - 10
+        );
+        picker.style.left = `${Math.max(10, leftPos)}px`;
+
+        // Убираем по клику вне
+        setTimeout(() => {
+            const closePickerOnClick = (e) => {
+                if (!picker.contains(e.target) && !element.contains(e.target)) {
+                    picker.remove();
+                    document.removeEventListener('click', closePickerOnClick);
+                }
+            };
+            document.addEventListener('click', closePickerOnClick);
+        }, 100);
+
+        // Убираем по ESC
+        const handleEsc = (e) => {
+            if (e.key === 'Escape') {
+                picker.remove();
+                document.removeEventListener('keydown', handleEsc);
+            }
+        };
+        document.addEventListener('keydown', handleEsc);
     }
 
     // Экспортируем функции в window для доступа из HTML

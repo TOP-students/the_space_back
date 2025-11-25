@@ -6,6 +6,7 @@ import json
 from schemas.message import MessageCreate, MessageOut, MessageUpdate
 from utils.auth import get_current_user, get_db
 from utils.file_upload import FileUploader
+from utils.socketio_instance import get_sio
 from models.base import User, ChatParticipant
 from crud.message import MessageRepository
 from crud.reaction import ReactionRepository
@@ -75,13 +76,28 @@ async def add_reaction(
     
     # добавляем реакцию (toggle)
     result = reaction_repo.add_reaction(message_id, current_user.id, reaction)
-    
+
     # получаем обновлённые реакции
     all_reactions = reaction_repo.get_message_reactions(message_id)
-    
+
+    # получаем текущую реакцию пользователя
+    my_reaction = reaction_repo.get_user_reaction(message_id, current_user.id)
+
+    # Отправка уведомления через Socket.IO
+    sio = get_sio()
+    if sio:
+        await sio.emit('reaction_updated', {
+            'message_id': message_id,
+            'chat_id': chat_id,
+            'room_id': str(chat_id),
+            'reactions': all_reactions,
+            'user_id': current_user.id
+        }, room=str(chat_id))
+
     return {
         "message_id": message_id,
-        "reactions": all_reactions
+        "reactions": all_reactions,
+        "my_reaction": my_reaction
     }
 
 @router.get("/{chat_id}/{message_id}/reactions")
@@ -119,18 +135,25 @@ def get_messages(
 ):
     """Получить сообщения из чата"""
     message_repo = MessageRepository(db)
-    
+    reaction_repo = ReactionRepository(db)
+
     # проверка что пользователь - участник чата
     participant = db.query(ChatParticipant).filter(
-        ChatParticipant.chat_id == chat_id, 
-        ChatParticipant.user_id == current_user.id, 
+        ChatParticipant.chat_id == chat_id,
+        ChatParticipant.user_id == current_user.id,
         ChatParticipant.is_active == True
     ).first()
-    
+
     if not participant:
         raise HTTPException(status_code=403, detail="Вы не участник этого чата")
-    
+
     messages = message_repo.get_by_chat(chat_id, limit, offset)
+
+    # Добавляем реакции к каждому сообщению
+    for msg in messages:
+        msg.reactions = reaction_repo.get_message_reactions(msg.id)
+        msg.my_reaction = reaction_repo.get_user_reaction(msg.id, current_user.id)
+
     return messages
 
 @router.get("/{chat_id}/search", response_model=List[MessageOut])
@@ -208,20 +231,20 @@ async def send_image(
 ):
     """Отправить изображение"""
     message_repo = MessageRepository(db)
-    
+
     # проверка участника
     participant = db.query(ChatParticipant).filter(
         ChatParticipant.chat_id == chat_id,
         ChatParticipant.user_id == current_user.id,
         ChatParticipant.is_active == True
     ).first()
-    
+
     if not participant:
         raise HTTPException(status_code=403, detail="Вы не участник этого чата")
-    
+
     # загрузка файла
     file_info = await FileUploader.upload_image(file)
-    
+
     # создание сообщения
     new_message = message_repo.create_with_attachment(
         chat_id,
@@ -230,7 +253,37 @@ async def send_image(
         "image",
         file_info
     )
-    
+
+    # Отправка уведомления через Socket.IO
+    sio = get_sio()
+    if sio:
+        attachment_data = {
+            'id': new_message.attachment.id,
+            'file_url': new_message.attachment.file_url,
+            'file_type': new_message.attachment.file_type,
+            'file_size': new_message.attachment.file_size
+        }
+
+        message_data = {
+            'id': new_message.id,
+            'chat_id': new_message.chat_id,
+            'room_id': str(chat_id),
+            'user_id': new_message.user_id,
+            'content': new_message.content,
+            'message': new_message.content,
+            'type': new_message.type,
+            'created_at': new_message.created_at.isoformat(),
+            'timestamp': new_message.created_at.isoformat(),
+            'user_nickname': current_user.nickname,
+            'nickname': current_user.nickname,
+            'user_avatar_url': current_user.avatar_url,
+            'attachment': attachment_data,
+            'reactions': [],
+            'my_reaction': None
+        }
+
+        await sio.emit('new_message', message_data, room=str(chat_id))
+
     return new_message
 
 @router.post("/{chat_id}/upload-audio", response_model=MessageOut)
@@ -242,18 +295,18 @@ async def send_audio(
 ):
     """Отправить аудио"""
     message_repo = MessageRepository(db)
-    
+
     participant = db.query(ChatParticipant).filter(
         ChatParticipant.chat_id == chat_id,
         ChatParticipant.user_id == current_user.id,
         ChatParticipant.is_active == True
     ).first()
-    
+
     if not participant:
         raise HTTPException(status_code=403, detail="Вы не участник этого чата")
-    
+
     file_info = await FileUploader.upload_audio(file)
-    
+
     new_message = message_repo.create_with_attachment(
         chat_id,
         current_user.id,
@@ -261,7 +314,37 @@ async def send_audio(
         "audio",
         file_info
     )
-    
+
+    # Отправка уведомления через Socket.IO
+    sio = get_sio()
+    if sio:
+        attachment_data = {
+            'id': new_message.attachment.id,
+            'file_url': new_message.attachment.file_url,
+            'file_type': new_message.attachment.file_type,
+            'file_size': new_message.attachment.file_size
+        }
+
+        message_data = {
+            'id': new_message.id,
+            'chat_id': new_message.chat_id,
+            'room_id': str(chat_id),
+            'user_id': new_message.user_id,
+            'content': new_message.content,
+            'message': new_message.content,
+            'type': new_message.type,
+            'created_at': new_message.created_at.isoformat(),
+            'timestamp': new_message.created_at.isoformat(),
+            'user_nickname': current_user.nickname,
+            'nickname': current_user.nickname,
+            'user_avatar_url': current_user.avatar_url,
+            'attachment': attachment_data,
+            'reactions': [],
+            'my_reaction': None
+        }
+
+        await sio.emit('new_message', message_data, room=str(chat_id))
+
     return new_message
 
 @router.post("/{chat_id}/upload-document", response_model=MessageOut)
@@ -273,18 +356,18 @@ async def send_document(
 ):
     """Отправить документ"""
     message_repo = MessageRepository(db)
-    
+
     participant = db.query(ChatParticipant).filter(
         ChatParticipant.chat_id == chat_id,
         ChatParticipant.user_id == current_user.id,
         ChatParticipant.is_active == True
     ).first()
-    
+
     if not participant:
         raise HTTPException(status_code=403, detail="Вы не участник этого чата")
-    
+
     file_info = await FileUploader.upload_document(file)
-    
+
     new_message = message_repo.create_with_attachment(
         chat_id,
         current_user.id,
@@ -292,5 +375,35 @@ async def send_document(
         "file",
         file_info
     )
-    
+
+    # Отправка уведомления через Socket.IO
+    sio = get_sio()
+    if sio:
+        attachment_data = {
+            'id': new_message.attachment.id,
+            'file_url': new_message.attachment.file_url,
+            'file_type': new_message.attachment.file_type,
+            'file_size': new_message.attachment.file_size
+        }
+
+        message_data = {
+            'id': new_message.id,
+            'chat_id': new_message.chat_id,
+            'room_id': str(chat_id),
+            'user_id': new_message.user_id,
+            'content': new_message.content,
+            'message': new_message.content,
+            'type': new_message.type,
+            'created_at': new_message.created_at.isoformat(),
+            'timestamp': new_message.created_at.isoformat(),
+            'user_nickname': current_user.nickname,
+            'nickname': current_user.nickname,
+            'user_avatar_url': current_user.avatar_url,
+            'attachment': attachment_data,
+            'reactions': [],
+            'my_reaction': None
+        }
+
+        await sio.emit('new_message', message_data, room=str(chat_id))
+
     return new_message

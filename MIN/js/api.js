@@ -175,6 +175,97 @@ const API = {
         return this.delete(`/messages/${chatId}/${messageId}`);
     },
 
+    // Загрузить изображение
+    async uploadImage(chatId, file) {
+        const token = AuthService.getToken();
+        const formData = new FormData();
+        formData.append('file', file);
+
+        const response = await fetch(`${CONFIG.API_BASE_URL}/messages/${chatId}/upload-image`, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${token}`
+            },
+            body: formData
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+            if (response.status === 401) {
+                AuthService.logout();
+                throw new Error('Сессия истекла. Войдите снова.');
+            }
+            throw new Error(data.detail || 'Ошибка загрузки изображения');
+        }
+
+        return data;
+    },
+
+    // Загрузить аудио
+    async uploadAudio(chatId, file) {
+        const token = AuthService.getToken();
+        const formData = new FormData();
+        formData.append('file', file);
+
+        const response = await fetch(`${CONFIG.API_BASE_URL}/messages/${chatId}/upload-audio`, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${token}`
+            },
+            body: formData
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+            if (response.status === 401) {
+                AuthService.logout();
+                throw new Error('Сессия истекла. Войдите снова.');
+            }
+            throw new Error(data.detail || 'Ошибка загрузки аудио');
+        }
+
+        return data;
+    },
+
+    // Загрузить документ
+    async uploadDocument(chatId, file) {
+        const token = AuthService.getToken();
+        const formData = new FormData();
+        formData.append('file', file);
+
+        const response = await fetch(`${CONFIG.API_BASE_URL}/messages/${chatId}/upload-document`, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${token}`
+            },
+            body: formData
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+            if (response.status === 401) {
+                AuthService.logout();
+                throw new Error('Сессия истекла. Войдите снова.');
+            }
+            throw new Error(data.detail || 'Ошибка загрузки документа');
+        }
+
+        return data;
+    },
+
+    // Добавить реакцию на сообщение
+    async addReaction(chatId, messageId, reaction) {
+        return this.post(`/messages/${chatId}/${messageId}/react?reaction=${encodeURIComponent(reaction)}`, {});
+    },
+
+    // Получить реакции на сообщение
+    async getReactions(chatId, messageId) {
+        return this.get(`/messages/${chatId}/${messageId}/reactions`);
+    },
+
     // === PROFILE ENDPOINTS ===
 
     // Получить свой профиль

@@ -245,6 +245,16 @@ def register_socketio_handlers(sio: socketio.AsyncServer):
                     type='text'
                 )
 
+                # Получаем attachment если есть
+                attachment_data = None
+                if new_message.attachment:
+                    attachment_data = {
+                        'id': new_message.attachment.id,
+                        'file_url': new_message.attachment.file_url,
+                        'file_type': new_message.attachment.file_type,
+                        'file_size': new_message.attachment.file_size
+                    }
+
                 # Формируем данные для отправки
                 message_data = {
                     'id': new_message.id,
@@ -258,7 +268,10 @@ def register_socketio_handlers(sio: socketio.AsyncServer):
                     'timestamp': new_message.created_at.isoformat(),
                     'user_nickname': user.nickname,
                     'nickname': user.nickname,  # для совместимости
-                    'user_avatar_url': user.avatar_url  # добавляем аватар
+                    'user_avatar_url': user.avatar_url,  # добавляем аватар
+                    'attachment': attachment_data,  # добавляем вложение
+                    'reactions': [],  # пустой список реакций для нового сообщения
+                    'my_reaction': None  # нет реакций от текущего пользователя
                 }
 
                 try:

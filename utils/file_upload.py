@@ -2,12 +2,15 @@ import cloudinary
 import cloudinary.uploader
 from fastapi import UploadFile, HTTPException
 import os
+from dotenv import load_dotenv
 
-# конфигурация Cloudinary
+load_dotenv()
+
+# конфигурация Cloudinary из переменных окружения
 cloudinary.config(
-    cloud_name="dfruz5o5g",
-    api_key="378274557374477",
-    api_secret="8R4fatWu34blbQT-Wk9Y8pOSwKo"
+    cloud_name=os.getenv("CLOUDINARY_CLOUD_NAME"),
+    api_key=os.getenv("CLOUDINARY_API_KEY"),
+    api_secret=os.getenv("CLOUDINARY_API_SECRET")
 )
 
 # разрешённые типы файлов и размеры
