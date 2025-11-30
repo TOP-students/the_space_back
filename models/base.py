@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine, Column, String, Boolean, DateTime, ForeignKey, BigInteger, Text, JSON, Index
+from sqlalchemy import create_engine, Column, String, Boolean, DateTime, ForeignKey, Integer, BigInteger, Text, JSON, Index
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.orm import relationship
@@ -152,3 +152,52 @@ class Ban(Base):
     until = Column(DateTime(timezone=True))
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     __table_args__ = (Index('ix_bans_user_space', 'user_id', 'space_id'),)
+
+class Notification(Base):
+    __tablename__ = "notifications"
+    id = Column(BigInteger, primary_key=True, index=True, autoincrement=True)
+    user_id = Column(BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    type = Column(String(50), nullable=False)  # mention, reply, space_invite, role_change
+    title = Column(String(255), nullable=False)
+    content = Column(Text)
+    related_message_id = Column(BigInteger, ForeignKey("messages.id", ondelete="CASCADE"))
+    related_user_id = Column(BigInteger, ForeignKey("users.id", ondelete="CASCADE"))
+    related_space_id = Column(BigInteger, ForeignKey("spaces.id", ondelete="CASCADE"))
+    is_read = Column(Boolean, default=False, index=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+class Mention(Base):
+    __tablename__ = "mentions"
+    id = Column(BigInteger, primary_key=True, index=True, autoincrement=True)
+    message_id = Column(BigInteger, ForeignKey("messages.id", ondelete="CASCADE"), nullable=False, index=True)
+    mentioned_user_id = Column(BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    __table_args__ = (Index('ix_mentions_message_user', 'message_id', 'mentioned_user_id'),)
+
+class StickerPack(Base):
+    __tablename__ = "sticker_packs"
+    id = Column(BigInteger, primary_key=True, index=True, autoincrement=True)
+    name = Column(String(100), nullable=False)
+    description = Column(Text)
+    author_id = Column(BigInteger, ForeignKey("users.id", ondelete="SET NULL"))
+    thumbnail_url = Column(String(500))
+    is_public = Column(Boolean, default=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+class Sticker(Base):
+    __tablename__ = "stickers"
+    id = Column(BigInteger, primary_key=True, index=True, autoincrement=True)
+    pack_id = Column(BigInteger, ForeignKey("sticker_packs.id", ondelete="CASCADE"), nullable=False, index=True)
+    name = Column(String(100))
+    image_url = Column(String(500), nullable=False)
+    emoji_shortcode = Column(String(50))
+    sort_order = Column(Integer, default=0)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+class UserStickerPack(Base):
+    __tablename__ = "user_sticker_packs"
+    id = Column(BigInteger, primary_key=True, index=True, autoincrement=True)
+    user_id = Column(BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    pack_id = Column(BigInteger, ForeignKey("sticker_packs.id", ondelete="CASCADE"), nullable=False)
+    added_at = Column(DateTime(timezone=True), server_default=func.now())
+    __table_args__ = (Index('ix_user_sticker_pack', 'user_id', 'pack_id'),)

@@ -4,7 +4,7 @@ import uvicorn
 import socketio
 
 from models.base import Base, SessionLocal, engine
-from routers import auth, spaces, messages, profile
+from routers import auth, spaces, messages, profile, notifications, stickers
 from crud.user import UserRepository
 from crud.space import SpaceRepository
 from crud.message import MessageRepository
@@ -49,6 +49,8 @@ app.include_router(auth.router, prefix="/auth", tags=["auth"])
 app.include_router(spaces.router, prefix="/spaces", tags=["spaces"])
 app.include_router(messages.router, prefix="/messages", tags=["messages"])
 app.include_router(profile.router, prefix="/profile", tags=["profile"])
+app.include_router(notifications.router, prefix="/notifications", tags=["notifications"])
+app.include_router(stickers.router, prefix="/stickers", tags=["stickers"])
 
 # создание таблиц
 Base.metadata.create_all(bind=engine)

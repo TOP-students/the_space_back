@@ -18,9 +18,16 @@ class MessageRepository:
         self.db.commit()
         self.db.refresh(message)
 
+        # загрузка юзера для ответа
         user = self.db.query(User).filter(User.id == user_id).first()
         message.user = user
         message.user_nickname = user.nickname if user else None
+        
+        # обработка упоминаний
+        if content and "@" in content:
+            from crud.notification import MentionRepository
+            mention_repo = MentionRepository(self.db)
+            mention_repo.create_mentions(message.id, content, user_id, chat_id)
 
         return message
     

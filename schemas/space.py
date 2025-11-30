@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from typing import Optional, List
 from datetime import datetime
 
@@ -6,6 +6,26 @@ class SpaceCreate(BaseModel):
     name: str
     description: Optional[str] = None
     background_url: Optional[str] = None
+    
+    @field_validator('name')
+    @classmethod
+    def validate_name(cls, v):
+        from utils.validators import Validators
+        is_valid, error = Validators.validate_space_name(v)
+        if not is_valid:
+            raise ValueError(error)
+        return Validators.sanitize_input(v)
+    
+    @field_validator('description')
+    @classmethod
+    def validate_description(cls, v):
+        if v:
+            from utils.validators import Validators
+            is_valid, error = Validators.validate_space_description(v)
+            if not is_valid:
+                raise ValueError(error)
+            return Validators.sanitize_input(v)
+        return v
 
 class SpaceOut(BaseModel):
     id: int
