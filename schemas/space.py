@@ -1,10 +1,11 @@
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 from typing import Optional, List
 from datetime import datetime
 
+
 class SpaceCreate(BaseModel):
-    name: str
-    description: Optional[str] = None
+    name: str = Field(..., min_length=3, max_length=100)
+    description: Optional[str] = Field(None, max_length=500)
     background_url: Optional[str] = None
     
     @field_validator('name')
@@ -47,6 +48,9 @@ class RoleOut(BaseModel):
     name: str
     permissions: Optional[List[str]] = None
     color: Optional[str] = None
+
+    class Config:
+        from_attributes = True
 
 class BanCreate(BaseModel):
     reason: Optional[str] = None

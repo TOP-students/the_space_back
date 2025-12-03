@@ -335,6 +335,42 @@ const API = {
         }
 
         return data;
+    },
+
+    // === РОЛИ И ПРАВА ===
+
+    // Получить роли пространства
+    async getSpaceRoles(spaceId) {
+        return this.get(`/spaces/${spaceId}/roles`);
+    },
+
+    // Создать кастомную роль
+    async createRole(spaceId, roleData) {
+        return this.post(`/spaces/${spaceId}/roles`, roleData);
+    },
+
+    // Назначить роль пользователю
+    async assignRole(spaceId, userId, roleId) {
+        return this.post(`/spaces/${spaceId}/assign-role/${userId}/${roleId}`, {});
+    },
+
+    // Получить свои права в пространстве
+    async getMyPermissions(spaceId) {
+        return this.get(`/spaces/${spaceId}/my-permissions`);
+    },
+
+    // Кикнуть пользователя
+    async kickUser(spaceId, userId) {
+        return this.delete(`/spaces/${spaceId}/kick/${userId}`);
+    },
+
+    // Забанить пользователя
+    async banUser(spaceId, userId, banData) {
+        return this.post(`/spaces/${spaceId}/ban/${userId}`, banData);
+    },
+
+    async unbanUser(spaceId, userId) {
+        return this.delete(`/spaces/${spaceId}/unban/${userId}`);
     }
 };
 

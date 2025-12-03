@@ -79,17 +79,25 @@
                 </div>
             </div>
             <div class="profile-info">
-                <h2 class="profile-name">UserName</h2>
-                <span class="profile-email">email@example.com</span>
+                <h2 class="profile-name" id="profile-name">UserName</h2>
+                <span class="profile-email" id="profile-email">email@example.com</span>
+                <span class="profile-id" id="profile-user-id">#123456789</span>
             </div>
-            <div class="profile-details">
-                <div class="detail-item">
-                    <span class="detail-label">ID:</span>
-                    <span class="detail-value" id="profile-user-id">#123456789</span>
+            <div class="profile-bio-section">
+                <div class="profile-bio-header">
+                    <span class="bio-label">О себе</span>
+                    <button class="bio-edit-button" id="bio-edit-btn" style="display: none;" title="Редактировать">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M11 4H4C3.46957 4 2.96086 4.21071 2.58579 4.58579C2.21071 4.96086 2 5.46957 2 6V20C2 20.5304 2.21071 21.0391 2.58579 21.4142C2.96086 21.7893 3.46957 22 4 22H18C18.5304 22 19.0391 21.7893 19.4142 21.4142C19.7893 21.0391 20 20.5304 20 20V13" stroke-linecap="round" stroke-linejoin="round"/>
+                            <path d="M18.5 2.50001C18.8978 2.10219 19.4374 1.87869 20 1.87869C20.5626 1.87869 21.1022 2.10219 21.5 2.50001C21.8978 2.89784 22.1213 3.43741 22.1213 4.00001C22.1213 4.56262 21.8978 5.10219 21.5 5.50001L12 15L8 16L9 12L18.5 2.50001Z" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                    </button>
                 </div>
-                <div class="detail-item">
-                    <span class="detail-label">Никнейм:</span>
-                    <span class="detail-value" id="profile-nickname">username</span>
+                <p class="profile-bio" id="profile-bio">Информация о пользователе отсутствует</p>
+                <textarea class="profile-bio-edit" id="profile-bio-textarea" style="display: none;" maxlength="500" placeholder="Расскажите о себе..."></textarea>
+                <div class="profile-bio-controls" id="bio-controls" style="display: none;">
+                    <button class="bio-save-btn" id="bio-save-btn">Сохранить</button>
+                    <button class="bio-cancel-btn" id="bio-cancel-btn">Отмена</button>
                 </div>
             </div>
             <div class="profile-modal-controls">

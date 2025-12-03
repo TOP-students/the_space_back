@@ -1064,3 +1064,705 @@ Pillow>=10.0.0
 10. `.env.example` - конфигурация Supabase
 
 ---
+
+## 2025-11-26 - Система прикрепления файлов и реакции на сообщения
+
+### Общая архитектура
+
+Реализована полноценная система работы с вложениями (файлы, изображения, аудио, документы) и система реакций на сообщения с real-time синхронизацией.
+
+---
+
+### Интеграция Cloudinary
+
+Перешли с Supabase Storage на Cloudinary для хранения файлов.
+
+**Файл:** `utils/file_upload.py`
+
+#### Основной функционал:
+
+1. **Загрузка изображений**:
+   - Форматы: JPEG, PNG, GIF, WebP
+   - Максимальный размер: 10MB
+   - Оптимизация: качество 85%, авто-формат
+   - Transformation: `f_auto,q_auto`
+
+2. **Загрузка аудио**:
+   - Форматы: MP3, WAV, OGG, M4A
+   - Максимальный размер: 50MB
+   - Папка: `audio/`
+
+3. **Загрузка документов**:
+   - Форматы: PDF, DOC, DOCX, TXT
+   - Максимальный размер: 20MB
+   - Папка: `documents/`
+
+#### Генерация имен файлов:
+```python
+timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+unique_filename = f"{timestamp}_{file.filename}"
+```
+
+---
+
+### Модели данных
+
+**Файл:** `models/base.py`
+
+#### Таблица Attachment:
+```python
+class Attachment(Base):
+    id = Column(Integer, primary_key=True)
+    message_id = Column(Integer, ForeignKey('messages.id'))
+    file_url = Column(String)
+    file_type = Column(String)  # image/audio/document
+    file_size = Column(Integer)
+    created_at = Column(DateTime, server_default=func.now())
+```
+
+#### Таблица Reaction:
+```python
+class Reaction(Base):
+    id = Column(Integer, primary_key=True)
+    message_id = Column(Integer, ForeignKey('messages.id'))
+    user_id = Column(Integer, ForeignKey('users.id'))
+    reaction = Column(String)  # эмодзи
+    created_at = Column(DateTime, server_default=func.now())
+```
+
+#### Связь с Message:
+```python
+attachment = relationship("Attachment", foreign_keys=[attachment_id], lazy="joined")
+```
+
+Использование `lazy="joined"` гарантирует, что вложения загружаются сразу вместе с сообщениями (eager loading).
+
+---
+
+### CRUD операции
+
+**Файл:** `crud/message.py`
+
+#### Оптимизация запросов:
+```python
+messages = self.db.query(Message).options(
+    joinedload(Message.attachment)
+).join(User).filter(...)
+```
+
+Добавлен `joinedload` для избежания N+1 проблемы при загрузке вложений.
+
+#### Создание сообщения с вложением:
+```python
+def create_with_attachment(self, chat_id, user_id, content, type, file_info):
+    attachment = Attachment(
+        file_url=file_info["url"],
+        file_type=file_info.get("format"),
+        file_size=file_info.get("size")
+    )
+    self.db.add(attachment)
+    self.db.flush()  # Получаем ID без коммита
+
+    message = Message(
+        chat_id=chat_id,
+        user_id=user_id,
+        content=content,
+        type=type,
+        attachment_id=attachment.id
+    )
+```
+
+**Файл:** `crud/reaction.py`
+
+#### Toggle логика реакций:
+```python
+def add_reaction(self, message_id, user_id, reaction):
+    existing = self.db.query(Reaction).filter(
+        Reaction.message_id == message_id,
+        Reaction.user_id == user_id
+    ).first()
+
+    if existing:
+        if existing.reaction == reaction:
+            self.db.delete(existing)  # Toggle off
+            return None
+        existing.reaction = reaction  # Замена
+    else:
+        new_reaction = Reaction(...)  # Новая реакция
+```
+
+#### Группировка реакций:
+```python
+reactions_query = self.db.query(
+    Reaction.reaction,
+    func.count(Reaction.id).label('count')
+).filter(
+    Reaction.message_id == message_id
+).group_by(Reaction.reaction).all()
+
+# Формируем список пользователей для каждой реакции
+result.append({
+    "reaction": reaction,
+    "count": count,
+    "users": [{"id": u.id, "nickname": u.nickname} for u in users]
+})
+```
+
+---
+
+### API эндпоинты
+
+**Файл:** `routers/messages.py`
+
+#### POST `/messages/{chat_id}/upload-image`
+- Проверка участия в чате
+- Загрузка в Cloudinary
+- Создание сообщения с `type="image"`
+- WebSocket уведомление
+
+#### POST `/messages/{chat_id}/upload-audio`
+- Аналогично для аудио (`type="audio"`)
+
+#### POST `/messages/{chat_id}/upload-document`
+- Аналогично для документов (`type="document"`)
+
+#### POST `/messages/{chat_id}/{message_id}/react`
+- Toggle реакции
+- Получение обновленного списка реакций
+- WebSocket broadcast:
+```python
+await sio.emit('reaction_updated', {
+    'message_id': message_id,
+    'chat_id': chat_id,
+    'reactions': all_reactions,
+    'user_id': current_user.id
+}, room=str(chat_id))
+```
+
+#### GET `/messages/{chat_id}/{message_id}/reactions`
+- Получение всех реакций на сообщение
+
+#### GET `/messages/{chat_id}`
+Обновлено для загрузки реакций:
+```python
+for msg in messages:
+    msg.reactions = reaction_repo.get_message_reactions(msg.id)
+    msg.my_reaction = reaction_repo.get_user_reaction(msg.id, current_user.id)
+```
+
+---
+
+### Схемы данных
+
+**Файл:** `schemas/attachment.py`
+```python
+class AttachmentOut(BaseModel):
+    id: int
+    file_url: str
+    file_type: Optional[str]
+    file_size: Optional[int]
+```
+
+**Файл:** `schemas/message.py`
+```python
+class MessageOut(BaseModel):
+    id: int
+    chat_id: int
+    user_id: int
+    content: Optional[str]
+    type: str
+    created_at: datetime
+    user: Optional[UserInfo] = None
+    attachment: AttachmentOut | None = None
+    reactions: Optional[list] = None
+    my_reaction: Optional[str] = None  # Реакция текущего пользователя
+```
+
+---
+
+### WebSocket интеграция
+
+**Файл:** `utils/socketio_handlers.py`
+
+#### Отправка вложений в сообщениях:
+```python
+attachment_data = None
+if new_message.attachment:
+    attachment_data = {
+        'id': new_message.attachment.id,
+        'file_url': new_message.attachment.file_url,
+        'file_type': new_message.attachment.file_type,
+        'file_size': new_message.attachment.file_size
+    }
+
+message_data = {
+    'id': new_message.id,
+    'content': new_message.content,
+    'attachment': attachment_data,
+    'reactions': [],
+    'my_reaction': None,
+    ...
+}
+```
+
+**Файл:** `utils/socketio_instance.py` (новый)
+```python
+_sio_instance = None
+
+def set_sio(sio):
+    global _sio_instance
+    _sio_instance = sio
+
+def get_sio():
+    return _sio_instance
+```
+
+Создан глобальный инстанс Socket.IO для использования в REST эндпоинтах.
+
+**Файл:** `main.py`
+```python
+from utils.socketio_instance import set_sio
+set_sio(sio)
+```
+
+---
+
+### Frontend - UI компоненты
+
+**Файл:** `MIN/chat.html`
+
+#### Input для файлов:
+```html
+<input type="file" id="chat-file-input"
+       accept="image/*,audio/*,.pdf,.doc,.docx,.txt"
+       style="display: none;">
+```
+
+#### Кнопка прикрепления:
+```html
+<button type="button" id="attach-file-btn" class="attach-file-btn">
+    <svg><!-- Иконка скрепки --></svg>
+</button>
+```
+
+#### Подключение модулей:
+```html
+<link rel="stylesheet" href="css/attachments.css">
+<script src="js/attachments.js"></script>
+```
+
+---
+
+### Frontend - Стили
+
+**Файл:** `MIN/css/attachments.css`
+
+#### Вложенное изображение:
+```css
+.message-image {
+    max-width: 400px;
+    border-radius: 12px;
+    cursor: pointer;
+    transition: transform 0.2s;
+}
+.message-image:hover { transform: scale(1.02); }
+```
+
+#### Аудио плеер:
+```css
+.message-audio {
+    padding: 12px;
+    background: transparent;
+    border: 1px solid #40444b;
+    border-radius: 8px;
+}
+.message-audio:hover {
+    border-color: #8B0000;
+}
+```
+
+#### Документ:
+```css
+.message-document {
+    background: #2c2f33;
+    border: 1px solid #40444b;
+    padding: 12px;
+    border-radius: 8px;
+}
+```
+
+#### Реакции:
+```css
+.reactions-container {
+    display: flex;
+    gap: 4px;
+    flex-wrap: wrap;
+}
+
+.reaction-item {
+    background: #2c2f33;
+    border: 1px solid #40444b;
+    padding: 4px 8px;
+    border-radius: 12px;
+    cursor: pointer;
+}
+
+.reaction-item.my-reaction {
+    background: #8B0000;
+    border-color: #a52a2a;
+}
+```
+
+Фон изменен с прозрачного на `#2c2f33` для читаемости счетчиков.
+
+#### Picker реакций:
+```css
+.reaction-picker-popup {
+    position: fixed;
+    background: #2c2f33;
+    border: 2px solid #40444b;
+    padding: 12px;
+    display: grid;
+    grid-template-columns: repeat(7, 48px);
+    gap: 8px;
+    z-index: 10000;
+}
+```
+
+Popup содержит 42 эмодзи (6 рядов × 7 столбцов).
+
+#### Lightbox для изображений:
+```css
+.image-lightbox {
+    position: fixed;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+    background: rgba(0, 0, 0, 0.95);
+    z-index: 10000;
+}
+```
+
+---
+
+### Frontend - Логика
+
+**Файл:** `MIN/js/attachments.js`
+
+#### Утилиты:
+```javascript
+const AttachmentUtils = {
+    // Валидация типа и размера
+    validateFile(file) {
+        const maxSizes = {
+            'image': 10 * 1024 * 1024,
+            'audio': 50 * 1024 * 1024,
+            'document': 20 * 1024 * 1024
+        };
+    },
+
+    // Определение типа файла
+    getFileType(file) {
+        const imageTypes = ['image/jpeg', 'image/png', ...];
+        const audioTypes = ['audio/mpeg', 'audio/wav', ...];
+        const docTypes = ['application/pdf', ...];
+    },
+
+    // Рендеринг вложений
+    renderAttachment(attachment, type) {
+        if (type === 'image') return `<img class="attachment-image" ...>`;
+        if (type === 'audio') return `<audio controls ...>`;
+        if (type === 'document') return `<div class="message-document">...</div>`;
+    },
+
+    // Рендеринг реакций
+    renderReactions(reactions, myReaction, messageId) {
+        // Подсветка своей реакции через класс .my-reaction
+    },
+
+    // Lightbox
+    openImageLightbox(imageUrl) {
+        // Полноэкранный просмотр изображения
+    }
+}
+```
+
+**Файл:** `MIN/js/api.js`
+
+#### Методы загрузки:
+```javascript
+async uploadImage(chatId, file) {
+    const formData = new FormData();
+    formData.append('file', file);
+    const response = await fetch(`${CONFIG.API_BASE_URL}/messages/${chatId}/upload-image`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` },
+        body: formData
+    });
+}
+```
+
+Аналогично для `uploadAudio()` и `uploadDocument()`.
+
+#### Методы реакций:
+```javascript
+async addReaction(chatId, messageId, reaction) {
+    return this.post(`/messages/${chatId}/${messageId}/react?reaction=${encodeURIComponent(reaction)}`, {});
+}
+```
+
+**Файл:** `MIN/js/chat.js`
+
+#### Инициализация прикрепления файлов:
+```javascript
+let fileAttachmentInitialized = false;
+
+function initFileAttachment() {
+    if (fileAttachmentInitialized) {
+        // Клонируем input для удаления старых обработчиков
+        const newFileInput = fileInput.cloneNode(true);
+        fileInput.parentNode.replaceChild(newFileInput, fileInput);
+        return;
+    }
+
+    fileAttachmentInitialized = true;
+    attachBtn.addEventListener('click', () => fileInput.click());
+    fileInput.addEventListener('change', handleFileUpload);
+}
+```
+
+Флаг `fileAttachmentInitialized` предотвращает дублирование обработчиков при повторном рендере чата.
+
+#### Загрузка файла:
+```javascript
+async function handleFileUpload(e) {
+    const file = e.target.files[0];
+    AttachmentUtils.validateFile(file);
+
+    // Индикатор загрузки
+    const progressDiv = document.createElement('div');
+    progressDiv.className = 'upload-progress';
+    progressDiv.innerHTML = `<div class="spinner"></div><span>Загрузка ${file.name}...</span>`;
+    messageForm.appendChild(progressDiv);
+
+    // Загрузка
+    let uploadedMessage;
+    if (fileType === 'image') uploadedMessage = await API.uploadImage(...);
+
+    // Обновление UI
+    state.messages.push(uploadedMessage);
+    updateMessagesInChat();
+}
+```
+
+#### Обработчики реакций:
+```javascript
+function attachReactionHandlers(container) {
+    // Клик по существующей реакции (toggle)
+    const reactionItems = container.querySelectorAll('.reaction-item');
+    reactionItems.forEach(btn => {
+        btn.addEventListener('click', async (e) => {
+            await handleToggleReaction(messageId, reaction);
+        });
+    });
+
+    // Клик по сообщению (открыть picker)
+    messageBody.addEventListener('click', (e) => {
+        if (!e.target.closest('.message-action-btn') && ...) {
+            showReactionPicker(messageEl, messageId);
+        }
+    });
+
+    // Клик по изображению (lightbox)
+    const images = container.querySelectorAll('.attachment-image');
+    images.forEach(img => {
+        img.addEventListener('click', (e) => {
+            AttachmentUtils.openImageLightbox(img.dataset.url);
+        });
+    });
+}
+```
+
+#### Позиционирование picker:
+```javascript
+function showReactionPicker(element, messageId) {
+    const rect = element.getBoundingClientRect();
+    const pickerRect = picker.getBoundingClientRect();
+
+    const spaceBelow = window.innerHeight - rect.bottom;
+    const spaceAbove = rect.top;
+
+    if (spaceBelow >= pickerRect.height + 10) {
+        picker.style.top = `${rect.bottom + 5}px`;
+    } else if (spaceAbove >= pickerRect.height + 10) {
+        picker.style.top = `${rect.top - pickerRect.height - 5}px`;
+    } else {
+        picker.style.top = `${(window.innerHeight - pickerRect.height) / 2}px`;
+    }
+    picker.style.bottom = 'auto';  // Важно!
+}
+```
+
+Использование `top` вместо `bottom` решило проблему неправильного позиционирования.
+
+#### WebSocket обработчик реакций:
+```javascript
+state.wsClient.socket.on('reaction_updated', (data) => {
+    const message = state.messages.find(m => m.id == data.message_id);
+    if (message) {
+        message.reactions = data.reactions;
+
+        // Вычисляем my_reaction на основе массива reactions
+        message.my_reaction = null;
+        for (const reaction of data.reactions) {
+            const userReacted = reaction.users.find(u => u.id === state.currentUser.id);
+            if (userReacted) {
+                message.my_reaction = reaction.reaction;
+                break;
+            }
+        }
+    }
+    renderChat();
+});
+```
+
+#### Обновление структуры сообщений:
+```javascript
+state.wsClient.socket.on('new_message', (data) => {
+    const message = {
+        id: data.id,
+        user_id: parseInt(data.user_id),
+        content: data.message || data.content,
+        type: data.type || 'text',
+        attachment: data.attachment || null,
+        reactions: data.reactions || [],
+        my_reaction: data.my_reaction || null,
+        ...
+    };
+});
+```
+
+---
+
+### Исправленные проблемы
+
+#### Проблема 1: Файлы дублировались при загрузке
+**Симптом:** При загрузке одного файла создавалось 6 копий
+
+**Причина:** Обработчик события `change` добавлялся повторно при каждом рендере чата
+
+**Решение:** Флаг `fileAttachmentInitialized` + клонирование input для сброса обработчиков
+
+#### Проблема 2: Файлы не отображались после перезагрузки
+**Симптом:** После обновления страницы вложения показывались как обычный текст
+
+**Причина:** Вложения не загружались из БД вместе с сообщениями
+
+**Решение:**
+- Добавлен `lazy="joined"` в relationship
+- Добавлен `joinedload(Message.attachment)` в CRUD запросы
+
+#### Проблема 3: Изображения не открывались у других пользователей
+**Симптом:** Клик по изображению не работал для новых сообщений
+
+**Причина:** Обработчик lightbox добавлялся только при рендере истории, но не для новых сообщений
+
+**Решение:** Вызов `attachReactionHandlers()` после добавления каждого нового сообщения
+
+#### Проблема 4: Реакции с прозрачным фоном
+**Симптом:** Счетчики реакций не видны на темном фоне
+
+**Решение:** Изменение фона с `rgba(0, 0, 0, 0.3)` на `#2c2f33`
+
+#### Проблема 5: Popup реакций неправильно позиционировался
+**Симптом:** Popup вылезал за пределы экрана снизу
+
+**Решение:** Всегда использовать `top` вместо `bottom`, рассчитывать позицию относительно доступного места
+
+#### Проблема 6: Документы с белым текстом на белом фоне
+**Симптом:** Текст документов не виден
+
+**Решение:** Добавление `background: #2c2f33` и `border: 1px solid #40444b`
+
+#### Проблема 7: Своя реакция не подсвечивалась сразу
+**Симптом:** После клика на реакцию подсветка появлялась только после WebSocket события
+
+**Решение:** Добавление `my_reaction` в ответ эндпоинта `/react` для немедленного обновления
+
+#### Проблема 8: Порт 8000 заблокирован на Windows
+**Симптом:** Ошибка "Failed to fetch" при попытке входа
+
+**Причина:** Windows резервирует порт 8000 для некоторых системных служб
+
+**Решение:** Изменение порта на 8080 в `main.py` и `MIN/js/config.js`
+
+---
+
+### Конфигурация
+
+**Файл:** `.env`
+```env
+# Cloudinary
+CLOUDINARY_CLOUD_NAME="your-cloud-name"
+CLOUDINARY_API_KEY="your-api-key"
+CLOUDINARY_API_SECRET="your-api-secret"
+```
+
+**Файл:** `requirements.txt`
+```
+cloudinary>=1.36.0
+```
+
+---
+
+### Итоговый функционал
+
+#### Реализовано:
+- ✅ Загрузка изображений (JPEG, PNG, GIF, WebP)
+- ✅ Загрузка аудио (MP3, WAV, OGG, M4A)
+- ✅ Загрузка документов (PDF, DOC, DOCX, TXT)
+- ✅ Оптимизация и трансформация файлов в Cloudinary
+- ✅ Отображение вложений в чате
+- ✅ Lightbox для изображений
+- ✅ Кастомный плеер для аудио
+- ✅ Предпросмотр документов с иконкой и размером
+- ✅ Сохранение вложений в БД
+- ✅ Eager loading вложений
+- ✅ Real-time отправка файлов через WebSocket
+- ✅ Система реакций с 42 эмодзи
+- ✅ Toggle логика (повторный клик убирает реакцию)
+- ✅ Группировка реакций с счетчиками
+- ✅ Подсветка своей реакции
+- ✅ Всплывающий picker при клике на сообщение
+- ✅ Умное позиционирование popup
+- ✅ Real-time синхронизация реакций
+- ✅ Список пользователей для каждой реакции
+
+#### UX улучшения:
+- Индикатор загрузки файла
+- Валидация типа и размера
+- Модальные уведомления об успехе/ошибке
+- Hover эффекты на все интерактивные элементы
+- Закрытие popup по клику вне или ESC
+- Плавные анимации и переходы
+- Стилизованные компоненты в едином стиле
+
+#### Измененные/созданные файлы:
+1. `utils/file_upload.py` - новый модуль загрузки
+2. `utils/socketio_instance.py` - глобальный инстанс Socket.IO
+3. `models/base.py` - таблицы Attachment, Reaction, связи
+4. `crud/message.py` - eager loading, создание с вложениями
+5. `crud/reaction.py` - новый CRUD модуль
+6. `schemas/attachment.py` - новая схема
+7. `schemas/message.py` - поля attachment, reactions, my_reaction
+8. `routers/messages.py` - эндпоинты загрузки и реакций
+9. `main.py` - изменение порта, установка глобального sio
+10. `utils/socketio_handlers.py` - передача attachment в сообщениях
+11. `MIN/chat.html` - input для файлов, подключение модулей
+12. `MIN/css/attachments.css` - новые стили
+13. `MIN/js/attachments.js` - новый модуль утилит
+14. `MIN/js/api.js` - методы загрузки и реакций
+15. `MIN/js/chat.js` - логика файлов, реакций, обработчики
+16. `MIN/js/config.js` - изменение порта на 8080
+17. `requirements.txt` - cloudinary
+
+---

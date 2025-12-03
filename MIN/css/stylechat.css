@@ -883,6 +883,12 @@ body {
     color: #388e3c;
 }
 
+.role-badge {
+    color: white;
+    font-weight: 600;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+}
+
 .participant-kick-btn {
     background: none;
     border: none;
@@ -896,6 +902,55 @@ body {
 .participant-kick-btn:hover {
     opacity: 1;
     transform: scale(1.2);
+}
+
+/* Контекстное меню участников */
+.participant-context-menu {
+    position: fixed;
+    background: white;
+    border-radius: 8px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    min-width: 200px;
+    z-index: 10000;
+    display: none;
+    overflow: hidden;
+}
+
+.participant-context-menu.active {
+    display: block;
+}
+
+.context-menu-item {
+    padding: 12px 16px;
+    cursor: pointer;
+    transition: background 0.2s;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 14px;
+    color: #333;
+    border: none;
+    background: none;
+    width: 100%;
+    text-align: left;
+}
+
+.context-menu-item:hover {
+    background: #f5f5f5;
+}
+
+.context-menu-item.danger {
+    color: #d32f2f;
+}
+
+.context-menu-item.danger:hover {
+    background: #ffebee;
+}
+
+.context-menu-divider {
+    height: 1px;
+    background: #e0e0e0;
+    margin: 4px 0;
 }
 
 .btn-sm {
@@ -1110,7 +1165,8 @@ body {
 
 /* Профиль - Info */
 .profile-info {
-    padding: 80px 40px 20px 200px;
+    padding: 75px 40px 16px 180px;
+    text-align: left;
 }
 
 .profile-name {
@@ -1127,9 +1183,114 @@ body {
     margin-top: 4px;
 }
 
-/* Профиль - Details */
-.profile-details {
-    padding: 20px 50px 40px;
+.profile-id {
+    display: inline-block;
+    font-size: 12px;
+    color: #95a5a6;
+    background: #ecf0f1;
+    padding: 4px 10px;
+    border-radius: 12px;
+    margin-top: 8px;
+    font-family: 'Courier New', monospace;
+}
+
+/* Профиль - Bio Section */
+.profile-bio-section {
+    padding: 16px 40px 24px;
+    border-top: 1px solid #ecf0f1;
+}
+
+.profile-bio-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 12px;
+}
+
+.bio-label {
+    font-size: 13px;
+    font-weight: 600;
+    color: #666;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.bio-edit-button {
+    background: none;
+    border: none;
+    padding: 6px;
+    cursor: pointer;
+    color: #95a5a6;
+    transition: color 0.2s;
+    display: flex;
+    align-items: center;
+}
+
+.bio-edit-button:hover {
+    color: #555;
+}
+
+.profile-bio {
+    margin: 0;
+    font-size: 14px;
+    line-height: 1.6;
+    color: #555;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+}
+
+.profile-bio-edit {
+    width: 100%;
+    min-height: 80px;
+    padding: 12px;
+    border: 2px solid #ddd;
+    border-radius: 8px;
+    font-size: 14px;
+    font-family: inherit;
+    resize: vertical;
+    transition: border-color 0.2s;
+}
+
+.profile-bio-edit:focus {
+    outline: none;
+    border-color: #667eea;
+}
+
+.profile-bio-controls {
+    display: flex;
+    gap: 8px;
+    margin-top: 12px;
+    justify-content: flex-end;
+}
+
+.bio-save-btn,
+.bio-cancel-btn {
+    padding: 8px 16px;
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.bio-save-btn {
+    background: #667eea;
+    color: white;
+    border: none;
+}
+
+.bio-save-btn:hover {
+    background: #5568d3;
+}
+
+.bio-cancel-btn {
+    background: transparent;
+    color: #666;
+    border: 1px solid #ddd;
+}
+
+.bio-cancel-btn:hover {
+    background: #f8f9fa;
 }
 
 .detail-item {
@@ -1264,4 +1425,12 @@ body {
     font-size: 13px;
     font-weight: 600;
     text-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+}
+
+/* Иконка бана */
+.ban-icon {
+    margin-left: 6px;
+    font-size: 14px;
+    opacity: 0.8;
+    cursor: help;
 }

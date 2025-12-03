@@ -56,24 +56,34 @@ async def add_reaction(
     db: Session = Depends(get_db)
 ):
     """Добавить реакцию на сообщение"""
+    from crud.ban import BanRepository
+    from models.base import Chat
+
     reaction_repo = ReactionRepository(db)
     message_repo = MessageRepository(db)
-    
+    ban_repo = BanRepository(db)
+
     # проверка что сообщение существует и в правильном чате
     message = message_repo.get_by_id(message_id)
     if not message or message.chat_id != chat_id:
         raise HTTPException(status_code=404, detail="Сообщение не найдено")
-    
+
     # проверка участника
     participant = db.query(ChatParticipant).filter(
         ChatParticipant.chat_id == chat_id,
         ChatParticipant.user_id == current_user.id,
         ChatParticipant.is_active == True
     ).first()
-    
+
     if not participant:
         raise HTTPException(status_code=403, detail="Вы не участник этого чата")
-    
+
+    # Проверка бана
+    chat = db.query(Chat).filter(Chat.id == chat_id).first()
+    if chat and chat.space_id:
+        if ban_repo.is_active(current_user.id, chat.space_id):
+            raise HTTPException(status_code=403, detail="Вы забанены и не можете добавлять реакции")
+
     # добавляем реакцию (toggle)
     result = reaction_repo.add_reaction(message_id, current_user.id, reaction)
 
@@ -210,16 +220,49 @@ def delete_message(
     db: Session = Depends(get_db)
 ):
     """Удалить сообщение"""
+    from models.base import Chat, Space
+    from models.permissions import Permission
+    from crud.role import RoleRepository
+
     message_repo = MessageRepository(db)
-    
+    role_repo = RoleRepository(db)
+
+    # Проверяем существование сообщения
     message = message_repo.get_by_id(message_id)
-    if not message or message.chat_id != chat_id or message.user_id != current_user.id:
-        raise HTTPException(status_code=404, detail="Сообщение не найдено или недоступно")
-    
+    if not message or message.chat_id != chat_id:
+        raise HTTPException(status_code=404, detail="Сообщение не найдено")
+
+    # Проверяем является ли пользователь автором сообщения
+    is_author = message.user_id == current_user.id
+
+    # Если не автор, проверяем права на удаление чужих сообщений
+    if not is_author:
+        # Получаем chat и проверяем type
+        chat = db.query(Chat).filter(Chat.id == chat_id).first()
+        if not chat:
+            raise HTTPException(status_code=404, detail="Чат не найден")
+
+        # Если это групповой чат (space)
+        if chat.type == "group" and chat.space_id:
+            space = db.query(Space).filter(Space.id == chat.space_id).first()
+
+            # Проверяем: админ пространства или есть право DELETE_ANY_MESSAGES
+            can_delete = (
+                (space and space.admin_id == current_user.id) or
+                role_repo.check_permission(current_user.id, chat.space_id, Permission.DELETE_ANY_MESSAGES)
+            )
+
+            if not can_delete:
+                raise HTTPException(status_code=403, detail="У вас нет прав на удаление чужих сообщений")
+        else:
+            # В приватных чатах можно удалять только свои сообщения
+            raise HTTPException(status_code=403, detail="Вы можете удалять только свои сообщения")
+
+    # Удаляем сообщение
     deleted_message = message_repo.delete(message_id, current_user.id)
     if not deleted_message:
         raise HTTPException(status_code=400, detail="Не удалось удалить сообщение")
-    
+
     return {"message": "Сообщение удалено"}
 
 @router.post("/{chat_id}/upload-image", response_model=MessageOut)
@@ -230,7 +273,11 @@ async def send_image(
     db: Session = Depends(get_db)
 ):
     """Отправить изображение"""
+    from crud.ban import BanRepository
+    from models.base import Chat
+
     message_repo = MessageRepository(db)
+    ban_repo = BanRepository(db)
 
     # проверка участника
     participant = db.query(ChatParticipant).filter(
@@ -241,6 +288,12 @@ async def send_image(
 
     if not participant:
         raise HTTPException(status_code=403, detail="Вы не участник этого чата")
+
+    # Проверка бана
+    chat = db.query(Chat).filter(Chat.id == chat_id).first()
+    if chat and chat.space_id:
+        if ban_repo.is_active(current_user.id, chat.space_id):
+            raise HTTPException(status_code=403, detail="Вы забанены и не можете отправлять файлы")
 
     # загрузка файла
     file_info = await FileUploader.upload_image(file)
@@ -294,7 +347,11 @@ async def send_audio(
     db: Session = Depends(get_db)
 ):
     """Отправить аудио"""
+    from crud.ban import BanRepository
+    from models.base import Chat
+
     message_repo = MessageRepository(db)
+    ban_repo = BanRepository(db)
 
     participant = db.query(ChatParticipant).filter(
         ChatParticipant.chat_id == chat_id,
@@ -304,6 +361,12 @@ async def send_audio(
 
     if not participant:
         raise HTTPException(status_code=403, detail="Вы не участник этого чата")
+
+    # Проверка бана
+    chat = db.query(Chat).filter(Chat.id == chat_id).first()
+    if chat and chat.space_id:
+        if ban_repo.is_active(current_user.id, chat.space_id):
+            raise HTTPException(status_code=403, detail="Вы забанены и не можете отправлять файлы")
 
     file_info = await FileUploader.upload_audio(file)
 
@@ -355,7 +418,11 @@ async def send_document(
     db: Session = Depends(get_db)
 ):
     """Отправить документ"""
+    from crud.ban import BanRepository
+    from models.base import Chat
+
     message_repo = MessageRepository(db)
+    ban_repo = BanRepository(db)
 
     participant = db.query(ChatParticipant).filter(
         ChatParticipant.chat_id == chat_id,
@@ -365,6 +432,12 @@ async def send_document(
 
     if not participant:
         raise HTTPException(status_code=403, detail="Вы не участник этого чата")
+
+    # Проверка бана
+    chat = db.query(Chat).filter(Chat.id == chat_id).first()
+    if chat and chat.space_id:
+        if ban_repo.is_active(current_user.id, chat.space_id):
+            raise HTTPException(status_code=403, detail="Вы забанены и не можете отправлять файлы")
 
     file_info = await FileUploader.upload_document(file)
 

@@ -1,11 +1,12 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional
 from datetime import datetime
 
+
 class ProfileUpdate(BaseModel):
     """Обновление профиля"""
-    display_name: Optional[str] = None
-    bio: Optional[str] = None
+    display_name: Optional[str] = Field(None, max_length=100)
+    bio: Optional[str] = Field(None, max_length=500)
     avatar_url: Optional[str] = None
     profile_background_url: Optional[str] = None
 

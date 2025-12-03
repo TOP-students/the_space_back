@@ -325,7 +325,7 @@ const Modal = {
     },
 
     // Показать кастомный контент
-    custom(htmlContent, title = '') {
+    custom(htmlContent, title = '', onReady = null) {
         return new Promise((resolve) => {
             const overlay = document.createElement('div');
             overlay.className = 'modal-overlay';
@@ -358,6 +358,11 @@ const Modal = {
                     resolve(false);
                 }
             });
+
+            // Вызываем колбэк после отрисовки
+            if (onReady) {
+                setTimeout(() => onReady(modal), 0);
+            }
         });
     },
 
@@ -380,11 +385,21 @@ const Modal = {
                 <form id="create-room-form">
                     <div class="modal-form-group">
                         <label for="room-name">Название комнаты</label>
-                        <input type="text" id="room-name" required placeholder="Введите название..."/>
+                        <input type="text"
+                               id="room-name"
+                               required
+                               placeholder="Введите название..."
+                               title="От 3 до 100 символов"
+                               minlength="3"
+                               maxlength="100"/>
                     </div>
                     <div class="modal-form-group">
                         <label for="room-description">Описание (необязательно)</label>
-                        <textarea id="room-description" placeholder="Описание комнаты..." rows="3"></textarea>
+                        <textarea id="room-description"
+                                  placeholder="Описание комнаты..."
+                                  title="Максимум 500 символов"
+                                  maxlength="500"
+                                  rows="3"></textarea>
                     </div>
                     <div class="modal-form-group">
                         <label>Добавить участников (необязательно)</label>
@@ -479,8 +494,20 @@ const Modal = {
             const name = modal.querySelector('#room-name').value.trim();
             const description = modal.querySelector('#room-description').value.trim();
 
+            // Валидация названия
             if (!name) {
                 Modal.error('Введите название комнаты');
+                return;
+            }
+
+            if (name.length < 3 || name.length > 100) {
+                Modal.error('Название комнаты должно содержать от 3 до 100 символов');
+                return;
+            }
+
+            // Валидация описания
+            if (description && description.length > 500) {
+                Modal.error('Описание не должно превышать 500 символов');
                 return;
             }
 

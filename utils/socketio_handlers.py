@@ -230,12 +230,21 @@ def register_socketio_handlers(sio: socketio.AsyncServer):
             db = SessionLocal()
             try:
                 message_repo = MessageRepository(db)
+                ban_repo = BanRepository(db)
 
                 # Получаем информацию о пользователе
                 user = db.query(User).filter(User.id == int(user_id)).first()
                 if not user:
                     await sio.emit('error', {'message': 'User not found'}, room=sid)
                     return
+
+                # Проверяем бан перед отправкой сообщения
+                from models.base import Chat
+                chat = db.query(Chat).filter(Chat.id == int(room_id)).first()
+                if chat and chat.space_id:
+                    if ban_repo.is_active(int(user_id), chat.space_id):
+                        await sio.emit('error', {'message': 'Вы забанены и не можете отправлять сообщения'}, room=sid)
+                        return
 
                 # Создаём сообщение
                 new_message = message_repo.create(

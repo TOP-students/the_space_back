@@ -75,3 +75,24 @@ class RolePreset:
 def has_permission(user_permissions: list, required_permission: str) -> bool:
     """Проверить наличие разрешения у пользователя"""
     return required_permission in user_permissions
+
+
+# Иерархия ролей (чем больше число, тем выше роль)
+class RoleHierarchy:
+    LEVELS = {
+        "Участник": 1,
+        "Модератор": 2,
+        "Владелец": 3
+    }
+
+    @staticmethod
+    def get_level(role_name: str) -> int:
+        """Получить уровень роли"""
+        return RoleHierarchy.LEVELS.get(role_name, 0)
+
+    @staticmethod
+    def can_moderate(moderator_role: str, target_role: str) -> bool:
+        """Проверить, может ли moderator управлять target"""
+        moderator_level = RoleHierarchy.get_level(moderator_role)
+        target_level = RoleHierarchy.get_level(target_role)
+        return moderator_level > target_level

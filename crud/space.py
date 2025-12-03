@@ -1,26 +1,23 @@
 from sqlalchemy.orm import Session
 
-from models.base import Space, Chat, ChatParticipant, User
-from models.permissions import RolePreset, Permission
+from models.base import Space, Chat, ChatParticipant, User, Role, UserRole
 
 class SpaceRepository:
     def __init__(self, db: Session):
         self.db = db
 
     def create(self, name: str, description: str, admin_id: int, background_url: str):
-        from models.base import Role, UserRole
-        
         # space
         space = Space(
-            name=name, 
-            description=description, 
-            admin_id=admin_id, 
+            name=name,
+            description=description,
+            admin_id=admin_id,
             background_url=background_url
         )
         self.db.add(space)
         self.db.commit()
         self.db.refresh(space)
-        
+
         # групповой чат для space
         chat = Chat(
             type="group",
@@ -31,48 +28,16 @@ class SpaceRepository:
         self.db.add(chat)
         self.db.commit()
         self.db.refresh(chat)
-        
-        # базовые роли
-        owner_role = Role(
-            space_id=space.id,
-            name=RolePreset.OWNER["name"],
-            permissions=RolePreset.OWNER["permissions"],
-            color=RolePreset.OWNER["color"]
-        )
-        self.db.add(owner_role)
-        
-        moderator_role = Role(
-            space_id=space.id,
-            name=RolePreset.MODERATOR["name"],
-            permissions=RolePreset.MODERATOR["permissions"],
-            color=RolePreset.MODERATOR["color"]
-        )
-        self.db.add(moderator_role)
-        
-        member_role = Role(
-            space_id=space.id,
-            name=RolePreset.MEMBER["name"],
-            permissions=RolePreset.MEMBER["permissions"],
-            color=RolePreset.MEMBER["color"]
-        )
-        self.db.add(member_role)
-        
-        self.db.commit()
-        self.db.refresh(owner_role)
-        
-        # создатель = владелец
-        user_role = UserRole(user_id=admin_id, role_id=owner_role.id)
-        self.db.add(user_role)
-        
-        # админ = участник
+
+        # админ = участник чата
         participant = ChatParticipant(
-            chat_id=chat.id, 
-            user_id=admin_id, 
+            chat_id=chat.id,
+            user_id=admin_id,
             is_active=True
         )
         self.db.add(participant)
         self.db.commit()
-        
+
         return space
 
     def get_by_id(self, space_id: int):
@@ -120,26 +85,43 @@ class SpaceRepository:
         space = self.get_by_id(space_id)
         if not space:
             return None
-        
+
         chat = self.get_space_chat(space_id)
         if not chat:
             return None
-        
+
         existing = self.db.query(ChatParticipant).filter(
-            ChatParticipant.chat_id == chat.id, 
+            ChatParticipant.chat_id == chat.id,
             ChatParticipant.user_id == user_id
         ).first()
-        
+
         if existing:
             existing.is_active = True
         else:
             participant = ChatParticipant(
-                chat_id=chat.id, 
-                user_id=user_id, 
+                chat_id=chat.id,
+                user_id=user_id,
                 is_active=True
             )
             self.db.add(participant)
-        
+
+        # Назначаем роль "Участник" если у пользователя нет роли в этом пространстве
+        existing_role = self.db.query(UserRole).join(Role).filter(
+            UserRole.user_id == user_id,
+            Role.space_id == space_id
+        ).first()
+
+        if not existing_role:
+            # Находим роль "Участник"
+            member_role = self.db.query(Role).filter(
+                Role.space_id == space_id,
+                Role.name == "Участник"
+            ).first()
+
+            if member_role:
+                user_role = UserRole(user_id=user_id, role_id=member_role.id)
+                self.db.add(user_role)
+
         self.db.commit()
         return space
 
