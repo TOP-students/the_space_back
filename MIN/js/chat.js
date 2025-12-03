@@ -15,7 +15,9 @@ document.addEventListener('DOMContentLoaded', async function() {
         currentChatId: null,
         messages: [],
         wsClient: null,
-        emojiPicker: null
+        emojiPicker: null,
+        currentUserPermissions: [],
+        chats: [] // Список чатов для проверки space_id
     };
 
     // DOM элементы
@@ -201,6 +203,36 @@ document.addEventListener('DOMContentLoaded', async function() {
                 console.log('Room mismatch, ignoring reaction update');
             }
         });
+
+        // Обработчик кика пользователя
+        state.wsClient.onUserKicked((data) => {
+            console.log('WS: User kicked from space', data);
+
+            // Если кикнули нас самих - возвращаемся к списку пространств
+            if (data.user_id == state.currentUser.id) {
+                Modal.warning('Вы были исключены из пространства');
+                // Покидаем пространство
+                state.currentSpace = null;
+                state.currentChatId = null;
+                // Перезагружаем список пространств
+                loadSpaces();
+                // Очищаем чат
+                chatMainElement.innerHTML = `
+                    <div class="empty-chat-message">
+                        <img src="assets/icons/cat.svg" alt="Кот" class="empty-chat-cat">
+                        <p>Выберите чат для общения</p>
+                    </div>
+                `;
+                sidebarRightContent.innerHTML = `
+                    <div class="sidebar-right-empty">
+                        <p>Выберите чат, чтобы увидеть информацию</p>
+                    </div>
+                `;
+            } else if (state.currentSpace && data.space_id == state.currentSpace.id) {
+                // Если кикнули кого-то другого в текущем пространстве - обновляем список участников
+                updateChatInfo();
+            }
+        });
     }
 
     // Обновить профиль пользователя
@@ -221,6 +253,8 @@ document.addEventListener('DOMContentLoaded', async function() {
     async function loadSpaces() {
         try {
             state.spaces = await API.getSpaces();
+            // Сохраняем информацию о чатах для проверки space_id
+            state.chats = state.spaces.map(s => ({ id: s.chat_id, space_id: s.id }));
             renderSpaces();
         } catch (error) {
             console.error('Error loading spaces:', error);
@@ -332,6 +366,16 @@ document.addEventListener('DOMContentLoaded', async function() {
                 return;
             }
             // Игнорируем остальные ошибки (например, если уже в пространстве)
+        }
+
+        // Получаем права пользователя в этом пространстве
+        try {
+            const permissions = await API.getMyPermissions(space.id);
+            state.currentUserPermissions = permissions.permissions || [];
+            console.log('User permissions in space:', state.currentUserPermissions);
+        } catch (error) {
+            console.error('Error loading permissions:', error);
+            state.currentUserPermissions = [];
         }
 
         // Присоединяемся к комнате через WebSocket
@@ -497,13 +541,28 @@ document.addEventListener('DOMContentLoaded', async function() {
                                 ? `<img src="${member.avatar_url}" alt="${member.nickname}" style="width: 100%; height: 100%; object-fit: cover; border-radius: 50%;">`
                                 : firstLetter;
                             const avatarStyle = member.avatar_url ? '' : `background: ${gradient};`;
+
+                            // Отображение роли из базы данных
+                            let roleDisplay = 'Участник';
+                            let roleClass = 'member';
+                            let roleStyle = '';
+
+                            if (member.role) {
+                                roleDisplay = member.role.name;
+                                roleClass = 'role-badge';
+                                roleStyle = `background-color: ${member.role.color}; color: white;`;
+                            }
+
                             return `
                                 <div class="chat-member-item" data-user-id="${member.id}" style="cursor: pointer;">
                                     <div class="chat-member-avatar" style="${avatarStyle}">${avatarContent}</div>
                                     <div class="chat-member-info">
-                                        <div class="chat-member-name">${member.nickname}</div>
-                                        <span class="chat-member-role ${isAdmin ? 'admin' : 'member'}">
-                                            ${isAdmin ? 'Администратор' : 'Участник'}
+                                        <div class="chat-member-name">
+                                            ${member.nickname}
+                                            ${member.is_banned ? '<span class="ban-icon" title="Забанен">🚫</span>' : ''}
+                                        </div>
+                                        <span class="chat-member-role ${roleClass}" style="${roleStyle}">
+                                            ${roleDisplay}
                                         </span>
                                     </div>
                                 </div>
@@ -517,11 +576,15 @@ document.addEventListener('DOMContentLoaded', async function() {
             setTimeout(() => {
                 const memberItems = sidebarRightContent.querySelectorAll('.chat-member-item[data-user-id]');
                 memberItems.forEach(item => {
+                    // Левый клик - открыть профиль
                     item.addEventListener('click', () => {
                         const userId = parseInt(item.dataset.userId);
                         openProfileModal({ id: userId, nickname: item.querySelector('.chat-member-name').textContent });
                     });
                 });
+
+                // Добавляем контекстное меню для правой панели
+                initRightPanelContextMenu(state.currentSpace.id);
             }, 0);
         } catch (error) {
             console.error('Error loading chat info:', error);
@@ -562,23 +625,33 @@ document.addEventListener('DOMContentLoaded', async function() {
                 : avatarLetter;
             const avatarStyle = avatarUrl ? '' : `background: ${avatarGradient};`;
 
-            // Кнопки редактирования и удаления для своих сообщений
-            const messageActions = isOwn ? `
-                <div class="message-actions">
-                    <button class="message-action-btn edit-btn" data-message-id="${msg.id}" title="Редактировать">
-                        <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                            <path d="M11 4H4C3.46957 4 2.96086 4.21071 2.58579 4.58579C2.21071 4.96086 2 5.46957 2 6V20C2 20.5304 2.21071 21.0391 2.58579 21.4142C2.96086 21.7893 3.46957 22 4 22H18C18.5304 22 19.0391 21.7893 19.4142 21.4142C19.7893 21.0391 20 20.5304 20 20V13" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                            <path d="M18.5 2.50023C18.8978 2.1024 19.4374 1.87891 20 1.87891C20.5626 1.87891 21.1022 2.1024 21.5 2.50023C21.8978 2.89805 22.1213 3.43762 22.1213 4.00023C22.1213 4.56284 21.8978 5.1024 21.5 5.50023L12 15.0002L8 16.0002L9 12.0002L18.5 2.50023Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                        </svg>
-                    </button>
-                    <button class="message-action-btn delete-btn" data-message-id="${msg.id}" title="Удалить">
-                        <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                            <path d="M3 6H5H21" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                            <path d="M8 6V4C8 3.46957 8.21071 2.96086 8.58579 2.58579C8.96086 2.21071 9.46957 2 10 2H14C14.5304 2 15.0391 2.21071 15.4142 2.58579C15.7893 2.96086 16 3.46957 16 4V6M19 6V20C19 20.5304 18.7893 21.0391 18.4142 21.4142C18.0391 21.7893 17.5304 22 17 22H7C6.46957 22 5.96086 21.7893 5.58579 21.4142C5.21071 21.0391 5 20.5304 5 20V6H19Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                        </svg>
-                    </button>
-                </div>
-            ` : '';
+            // Проверка прав на удаление
+            const currentChat = state.chats.find(c => c.id === state.currentChatId);
+            const canDeleteAny = currentChat?.space_id && state.currentUserPermissions?.includes('delete_any_messages');
+            const canDelete = isOwn || canDeleteAny;
+
+            // Кнопки редактирования и удаления
+            let messageActions = '';
+            if (canDelete) {
+                messageActions = `
+                    <div class="message-actions">
+                        ${isOwn ? `
+                            <button class="message-action-btn edit-btn" data-message-id="${msg.id}" title="Редактировать">
+                                <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                    <path d="M11 4H4C3.46957 4 2.96086 4.21071 2.58579 4.58579C2.21071 4.96086 2 5.46957 2 6V20C2 20.5304 2.21071 21.0391 2.58579 21.4142C2.96086 21.7893 3.46957 22 4 22H18C18.5304 22 19.0391 21.7893 19.4142 21.4142C19.7893 21.0391 20 20.5304 20 20V13" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                                    <path d="M18.5 2.50023C18.8978 2.1024 19.4374 1.87891 20 1.87891C20.5626 1.87891 21.1022 2.1024 21.5 2.50023C21.8978 2.89805 22.1213 3.43762 22.1213 4.00023C22.1213 4.56284 21.8978 5.1024 21.5 5.50023L12 15.0002L8 16.0002L9 12.0002L18.5 2.50023Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                                </svg>
+                            </button>
+                        ` : ''}
+                        <button class="message-action-btn delete-btn" data-message-id="${msg.id}" title="Удалить">
+                            <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                <path d="M3 6H5H21" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                                <path d="M8 6V4C8 3.46957 8.21071 2.96086 8.58579 2.58579C8.96086 2.21071 9.46957 2 10 2H14C14.5304 2 15.0391 2.21071 15.4142 2.58579C15.7893 2.96086 16 3.46957 16 4V6M19 6V20C19 20.5304 18.7893 21.0391 18.4142 21.4142C18.0391 21.7893 17.5304 22 17 22H7C6.46957 22 5.96086 21.7893 5.58579 21.4142C5.21071 21.0391 5 20.5304 5 20V6H19Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                            </svg>
+                        </button>
+                    </div>
+                `;
+            }
 
             // Рендер вложения если есть
             const attachmentHTML = msg.attachment ? AttachmentUtils.renderAttachment(msg.attachment, msg.type) : '';
@@ -1023,12 +1096,13 @@ document.addEventListener('DOMContentLoaded', async function() {
         }
 
         // Заполняем данные профиля
-        const profileName = profileModal.querySelector('.profile-name');
-        const profileEmail = profileModal.querySelector('.profile-email');
+        const profileName = profileModal.querySelector('#profile-name');
+        const profileEmail = profileModal.querySelector('#profile-email');
         const profileUserId = profileModal.querySelector('#profile-user-id');
-        const profileNickname = profileModal.querySelector('#profile-nickname');
+        const profileBio = profileModal.querySelector('#profile-bio');
         const profileBanner = profileModal.querySelector('.profile-banner');
         const profileAvatar = profileModal.querySelector('#profile-avatar-img');
+        const bioEditBtn = profileModal.querySelector('#bio-edit-btn');
 
         if (profileName) profileName.textContent = userData.nickname;
 
@@ -1038,6 +1112,7 @@ document.addEventListener('DOMContentLoaded', async function() {
 
         if (avatarUploadBtn) avatarUploadBtn.style.display = isOwnProfile ? 'flex' : 'none';
         if (bannerUploadBtn) bannerUploadBtn.style.display = isOwnProfile ? 'flex' : 'none';
+        if (bioEditBtn) bioEditBtn.style.display = isOwnProfile ? 'flex' : 'none';
 
         // Включаем/выключаем hover эффект на аватаре
         if (avatarContainer) {
@@ -1057,8 +1132,21 @@ document.addEventListener('DOMContentLoaded', async function() {
                 profileEmail.style.display = 'none';
             }
         }
+
         if (profileUserId) profileUserId.textContent = `#${userData.id}`;
-        if (profileNickname) profileNickname.textContent = userData.nickname;
+
+        // Bio
+        if (profileBio) {
+            if (userData.bio && userData.bio.trim()) {
+                profileBio.textContent = userData.bio;
+                profileBio.style.color = '#555';
+                profileBio.style.fontStyle = 'normal';
+            } else {
+                profileBio.textContent = 'Информация о пользователе отсутствует';
+                profileBio.style.color = '#95a5a6';
+                profileBio.style.fontStyle = 'italic';
+            }
+        }
 
         // Устанавливаем аватар (реальный или градиент)
         if (profileAvatar) {
@@ -1315,12 +1403,27 @@ document.addEventListener('DOMContentLoaded', async function() {
                         ${participants.map(p => {
                             const isSpaceAdmin = p.id === space.admin_id;
                             const firstLetter = p.nickname.charAt(0).toUpperCase();
+
+                            // Отображение роли
+                            let roleBadge = '';
+                            if (p.role) {
+                                // Если есть роль из базы - показываем её
+                                const roleColor = p.role.color || '#808080';
+                                roleBadge = `<div class="participant-badge role-badge" style="background-color: ${roleColor}; border: 1px solid ${roleColor};">${p.role.name}</div>`;
+                            } else {
+                                // Фоллбек если роль не назначена
+                                roleBadge = '<div class="participant-badge member-badge">Участник</div>';
+                            }
+
                             return `
-                                <div class="participant-card">
+                                <div class="participant-card" data-user-id="${p.id}">
                                     <div class="participant-avatar">${firstLetter}</div>
                                     <div class="participant-info">
-                                        <div class="participant-name">${p.nickname}</div>
-                                        ${isSpaceAdmin ? '<div class="participant-badge admin-badge">Администратор</div>' : '<div class="participant-badge member-badge">Участник</div>'}
+                                        <div class="participant-name">
+                                            ${p.nickname}
+                                            ${p.is_banned ? '<span class="ban-icon" title="Забанен">🚫</span>' : ''}
+                                        </div>
+                                        ${roleBadge}
                                     </div>
                                     ${isAdmin && p.id !== state.currentUser.id ? `
                                         <button class="participant-kick-btn" onclick="window.chatApp.kickUserFromSpace(${spaceId}, ${p.id})" title="Удалить">
@@ -1334,13 +1437,323 @@ document.addEventListener('DOMContentLoaded', async function() {
                 </div>
             `;
 
-            await Modal.custom(content);
+            await Modal.custom(content, '', () => {
+                // Инициализация контекстного меню после отрисовки
+                initParticipantContextMenu(spaceId, isAdmin);
+            });
+        } catch (error) {
+            await Modal.error('Ошибка: ' + error.message);
+        }
+    }
+
+    // Контекстное меню участников
+    function initParticipantContextMenu(spaceId, hasAdminRights) {
+        const participantCards = document.querySelectorAll('.participant-card');
+
+        // Создаем меню если его нет
+        let contextMenu = document.querySelector('.participant-context-menu');
+        if (!contextMenu) {
+            contextMenu = document.createElement('div');
+            contextMenu.className = 'participant-context-menu';
+            document.body.appendChild(contextMenu);
+        }
+
+        participantCards.forEach(card => {
+            const userId = parseInt(card.dataset.userId);
+
+            // Не показываем меню на себе
+            if (userId === state.currentUser.id) return;
+
+            card.addEventListener('contextmenu', async (e) => {
+                e.preventDefault();
+
+                // Получаем права текущего пользователя
+                const permissions = await API.getMyPermissions(spaceId);
+                const canKick = permissions.is_admin || permissions.permissions.includes('kick_members');
+                const canBan = permissions.is_admin || permissions.permissions.includes('ban_members');
+                const canManageRoles = permissions.is_admin || permissions.permissions.includes('manage_roles');
+
+                if (!canKick && !canBan && !canManageRoles) return;
+
+                // Получаем роль целевого пользователя
+                const participantsData = await API.getSpaceParticipants(spaceId);
+                const targetUser = participantsData.participants.find(p => p.id === userId);
+                const targetUserRole = targetUser?.role?.name || 'Участник';
+
+                // Определяем текущую роль (из permissions)
+                const currentUserRole = permissions.role?.name || 'Участник';
+
+                // Иерархия ролей
+                const roleHierarchy = {
+                    'Участник': 1,
+                    'Модератор': 2,
+                    'Владелец': 3
+                };
+
+                const currentLevel = roleHierarchy[currentUserRole] || 0;
+                const targetLevel = roleHierarchy[targetUserRole] || 0;
+                const canModerate = permissions.is_admin || currentLevel > targetLevel;
+
+                // Получаем список ролей для назначения
+                const allRoles = await API.getSpaceRoles(spaceId);
+                // Фильтруем роли: исключаем "Владелец" и роли >= текущей роли модератора
+                const roles = allRoles.filter(r => {
+                    if (r.name === 'Владелец') return false;
+                    if (permissions.is_admin) return true; // Владелец видит все роли кроме "Владелец"
+                    const roleLevel = roleHierarchy[r.name] || 0;
+                    return roleLevel < currentLevel; // Модератор видит только роли ниже своей
+                });
+
+                // Формируем меню
+                let menuHTML = '';
+
+                if (canManageRoles && canModerate && roles.length > 0) {
+                    menuHTML += '<div class="context-menu-section">';
+                    menuHTML += '<div style="padding: 8px 16px; font-size: 12px; color: #666; font-weight: 600;">Назначить роль</div>';
+                    roles.forEach(role => {
+                        menuHTML += `
+                            <button class="context-menu-item" onclick="window.chatApp.assignRoleToUser(${spaceId}, ${userId}, ${role.id})">
+                                <span style="width: 12px; height: 12px; border-radius: 50%; background: ${role.color || '#808080'};"></span>
+                                ${role.name}
+                            </button>
+                        `;
+                    });
+                    menuHTML += '</div>';
+                }
+
+                if (canModerate) {
+                    if (menuHTML) menuHTML += '<div class="context-menu-divider"></div>';
+
+                    // Если пользователь забанен, показываем кнопку разбана
+                    if (targetUser && targetUser.is_banned && canBan) {
+                        menuHTML += `
+                            <button class="context-menu-item" onclick="window.chatApp.unbanUserFromSpace(${spaceId}, ${userId})" style="color: #2e7d32;">
+                                ✅ Разбанить
+                            </button>
+                        `;
+                    }
+
+                    if (canKick) {
+                        menuHTML += `
+                            <button class="context-menu-item" onclick="window.chatApp.kickUserFromSpace(${spaceId}, ${userId})">
+                                👢 Исключить
+                            </button>
+                        `;
+                    }
+
+                    if (canBan && (!targetUser || !targetUser.is_banned)) {
+                        menuHTML += `
+                            <button class="context-menu-item danger" onclick="window.chatApp.banUserFromSpace(${spaceId}, ${userId})">
+                                🚫 Забанить
+                            </button>
+                        `;
+                    }
+                }
+
+                contextMenu.innerHTML = menuHTML;
+                contextMenu.style.left = `${e.pageX}px`;
+                contextMenu.style.top = `${e.pageY}px`;
+                contextMenu.classList.add('active');
+            });
+        });
+
+        // Закрытие меню по клику вне его
+        document.addEventListener('click', () => {
+            if (contextMenu) {
+                contextMenu.classList.remove('active');
+            }
+        });
+    }
+
+    // Контекстное меню для правой панели (аналогично модальному окну)
+    function initRightPanelContextMenu(spaceId) {
+        const memberItems = sidebarRightContent.querySelectorAll('.chat-member-item[data-user-id]');
+
+        // Создаем меню если его нет
+        let contextMenu = document.querySelector('.participant-context-menu');
+        if (!contextMenu) {
+            contextMenu = document.createElement('div');
+            contextMenu.className = 'participant-context-menu';
+            document.body.appendChild(contextMenu);
+        }
+
+        memberItems.forEach(item => {
+            const userId = parseInt(item.dataset.userId);
+
+            // Не показываем меню на себе
+            if (userId === state.currentUser.id) return;
+
+            item.addEventListener('contextmenu', async (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+
+                // Получаем права текущего пользователя
+                const permissions = await API.getMyPermissions(spaceId);
+                const canKick = permissions.is_admin || permissions.permissions.includes('kick_members');
+                const canBan = permissions.is_admin || permissions.permissions.includes('ban_members');
+                const canManageRoles = permissions.is_admin || permissions.permissions.includes('manage_roles');
+
+                if (!canKick && !canBan && !canManageRoles) return;
+
+                // Получаем роль целевого пользователя
+                const participantsData = await API.getSpaceParticipants(spaceId);
+                const targetUser = participantsData.participants.find(p => p.id === userId);
+                const targetUserRole = targetUser?.role?.name || 'Участник';
+
+                // Определяем текущую роль (из permissions)
+                const currentUserRole = permissions.role?.name || 'Участник';
+
+                // Иерархия ролей
+                const roleHierarchy = {
+                    'Участник': 1,
+                    'Модератор': 2,
+                    'Владелец': 3
+                };
+
+                const currentLevel = roleHierarchy[currentUserRole] || 0;
+                const targetLevel = roleHierarchy[targetUserRole] || 0;
+                const canModerate = permissions.is_admin || currentLevel > targetLevel;
+
+                // Получаем список ролей для назначения
+                const allRoles = await API.getSpaceRoles(spaceId);
+                // Фильтруем роли: исключаем "Владелец" и роли >= текущей роли модератора
+                const roles = allRoles.filter(r => {
+                    if (r.name === 'Владелец') return false;
+                    if (permissions.is_admin) return true; // Владелец видит все роли кроме "Владелец"
+                    const roleLevel = roleHierarchy[r.name] || 0;
+                    return roleLevel < currentLevel; // Модератор видит только роли ниже своей
+                });
+
+                // Формируем меню
+                let menuHTML = '';
+
+                if (canManageRoles && canModerate && roles.length > 0) {
+                    menuHTML += '<div class="context-menu-section">';
+                    menuHTML += '<div style="padding: 8px 16px; font-size: 12px; color: #666; font-weight: 600;">Назначить роль</div>';
+                    roles.forEach(role => {
+                        menuHTML += `
+                            <button class="context-menu-item" onclick="window.chatApp.assignRoleToUser(${spaceId}, ${userId}, ${role.id})">
+                                <span style="width: 12px; height: 12px; border-radius: 50%; background: ${role.color || '#808080'};"></span>
+                                ${role.name}
+                            </button>
+                        `;
+                    });
+                    menuHTML += '</div>';
+                }
+
+                if (canModerate) {
+                    if (menuHTML) menuHTML += '<div class="context-menu-divider"></div>';
+
+                    // Если пользователь забанен, показываем кнопку разбана
+                    if (targetUser && targetUser.is_banned && canBan) {
+                        menuHTML += `
+                            <button class="context-menu-item" onclick="window.chatApp.unbanUserFromSpace(${spaceId}, ${userId})" style="color: #2e7d32;">
+                                ✅ Разбанить
+                            </button>
+                        `;
+                    }
+
+                    if (canKick) {
+                        menuHTML += `
+                            <button class="context-menu-item" onclick="window.chatApp.kickUserFromSpace(${spaceId}, ${userId})">
+                                👢 Исключить
+                            </button>
+                        `;
+                    }
+
+                    if (canBan && (!targetUser || !targetUser.is_banned)) {
+                        menuHTML += `
+                            <button class="context-menu-item danger" onclick="window.chatApp.banUserFromSpace(${spaceId}, ${userId})">
+                                🚫 Забанить
+                            </button>
+                        `;
+                    }
+                }
+
+                contextMenu.innerHTML = menuHTML;
+                contextMenu.style.left = `${e.pageX}px`;
+                contextMenu.style.top = `${e.pageY}px`;
+                contextMenu.classList.add('active');
+            });
+        });
+
+        // Закрытие меню по клику вне его
+        document.addEventListener('click', () => {
+            if (contextMenu) {
+                contextMenu.classList.remove('active');
+            }
+        });
+    }
+
+    async function assignRoleToUser(spaceId, userId, roleId) {
+        // Закрываем контекстное меню
+        const contextMenu = document.querySelector('.participant-context-menu');
+        if (contextMenu) contextMenu.classList.remove('active');
+
+        try {
+            await API.assignRole(spaceId, userId, roleId);
+            await Modal.success('Роль назначена!');
+            await refreshParticipantsList(spaceId);
+            // Обновляем правую панель тоже
+            await updateChatInfo();
+        } catch (error) {
+            await Modal.error('Ошибка: ' + error.message);
+        }
+    }
+
+    async function banUserFromSpace(spaceId, userId) {
+        // Закрываем контекстное меню
+        const contextMenu = document.querySelector('.participant-context-menu');
+        if (contextMenu) contextMenu.classList.remove('active');
+
+        // Простая форма бана (можно расширить)
+        const reason = prompt('Причина бана (необязательно):');
+        const durationDays = prompt('Длительность в днях (оставьте пустым для вечного бана):');
+
+        let until = null;
+        if (durationDays && !isNaN(durationDays)) {
+            until = new Date();
+            until.setDate(until.getDate() + parseInt(durationDays));
+        }
+
+        try {
+            await API.banUser(spaceId, userId, {
+                reason: reason || null,
+                until: until ? until.toISOString() : null
+            });
+            await Modal.success('Пользователь забанен!');
+            await refreshParticipantsList(spaceId);
+            // Обновляем правую панель
+            await updateChatInfo();
+        } catch (error) {
+            await Modal.error('Ошибка: ' + error.message);
+        }
+    }
+
+    async function unbanUserFromSpace(spaceId, userId) {
+        // Закрываем контекстное меню
+        const contextMenu = document.querySelector('.participant-context-menu');
+        if (contextMenu) contextMenu.classList.remove('active');
+
+        const confirm = await Modal.confirm('Вы уверены, что хотите разбанить этого пользователя?');
+        if (!confirm) return;
+
+        try {
+            await API.unbanUser(spaceId, userId);
+            await Modal.success('Пользователь разбанен!');
+            await refreshParticipantsList(spaceId);
+            // Обновляем правую панель
+            await updateChatInfo();
         } catch (error) {
             await Modal.error('Ошибка: ' + error.message);
         }
     }
 
     async function kickUserFromSpace(spaceId, userId) {
+        // Закрываем контекстное меню
+        const contextMenu = document.querySelector('.participant-context-menu');
+        if (contextMenu) contextMenu.classList.remove('active');
+
         const confirm = await Modal.confirm('Вы уверены, что хотите удалить этого пользователя?');
         if (!confirm) return;
 
@@ -1349,6 +1762,8 @@ document.addEventListener('DOMContentLoaded', async function() {
 
             // Обновляем список участников без закрытия окна
             await refreshParticipantsList(spaceId);
+            // Обновляем правую панель
+            await updateChatInfo();
 
             // Показываем уведомление об успехе
             await Modal.success('Пользователь удален из пространства');
@@ -1378,12 +1793,25 @@ document.addEventListener('DOMContentLoaded', async function() {
                     ${participants.map(p => {
                         const isSpaceAdmin = p.id === space.admin_id;
                         const firstLetter = p.nickname.charAt(0).toUpperCase();
+
+                        // Отображение роли
+                        let roleBadge = '';
+                        if (p.role) {
+                            const roleColor = p.role.color || '#808080';
+                            roleBadge = `<div class="participant-badge role-badge" style="background-color: ${roleColor}; border: 1px solid ${roleColor};">${p.role.name}</div>`;
+                        } else {
+                            roleBadge = '<div class="participant-badge member-badge">Участник</div>';
+                        }
+
                         return `
-                            <div class="participant-card">
+                            <div class="participant-card" data-user-id="${p.id}">
                                 <div class="participant-avatar">${firstLetter}</div>
                                 <div class="participant-info">
-                                    <div class="participant-name">${p.nickname}</div>
-                                    ${isSpaceAdmin ? '<div class="participant-badge admin-badge">Администратор</div>' : '<div class="participant-badge member-badge">Участник</div>'}
+                                    <div class="participant-name">
+                                        ${p.nickname}
+                                        ${p.is_banned ? '<span class="ban-icon" title="Забанен">🚫</span>' : ''}
+                                    </div>
+                                    ${roleBadge}
                                 </div>
                                 ${isAdmin && p.id !== state.currentUser.id ? `
                                     <button class="participant-kick-btn" onclick="window.chatApp.kickUserFromSpace(${spaceId}, ${p.id})" title="Удалить">
@@ -1397,6 +1825,11 @@ document.addEventListener('DOMContentLoaded', async function() {
             `;
 
             participantsContainer.innerHTML = newContent;
+
+            // Переинициализируем контекстное меню после обновления
+            setTimeout(() => {
+                initParticipantContextMenu(spaceId, isAdmin);
+            }, 50);
         } catch (error) {
             console.error('Error refreshing participants:', error);
         }
@@ -1572,6 +2005,83 @@ document.addEventListener('DOMContentLoaded', async function() {
                 // Сбрасываем input для возможности повторной загрузки того же файла
                 bannerFileInput.value = '';
             }
+        });
+    }
+
+    // Обработчики для редактирования bio
+    const bioEditBtn = document.getElementById('bio-edit-btn');
+    const bioSaveBtn = document.querySelector('.bio-save-btn');
+    const bioCancelBtn = document.querySelector('.bio-cancel-btn');
+    const profileBio = document.getElementById('profile-bio');
+    const bioTextarea = document.getElementById('profile-bio-textarea');
+    const bioControls = document.getElementById('bio-controls');
+
+    if (bioEditBtn) {
+        bioEditBtn.addEventListener('click', () => {
+            // Показываем режим редактирования
+            if (profileBio) profileBio.style.display = 'none';
+            if (bioTextarea) {
+                bioTextarea.style.display = 'block';
+                bioTextarea.value = state.currentUser.bio || '';
+            }
+            if (bioControls) bioControls.style.display = 'flex';
+        });
+    }
+
+    if (bioSaveBtn) {
+        bioSaveBtn.addEventListener('click', async () => {
+            const newBio = bioTextarea.value.trim();
+
+            // Валидация длины (максимум 500 символов)
+            if (newBio.length > 500) {
+                Modal.warning('Описание не должно превышать 500 символов!');
+                return;
+            }
+
+            try {
+                // Обновляем профиль через API
+                const updatedUser = await API.updateProfile({
+                    bio: newBio || null
+                });
+
+                // Обновляем state
+                state.currentUser = updatedUser;
+
+                // Обновляем UI
+                if (profileBio) {
+                    if (newBio) {
+                        profileBio.textContent = newBio;
+                        profileBio.style.color = '#555';
+                        profileBio.style.fontStyle = 'normal';
+                    } else {
+                        profileBio.textContent = 'Информация о пользователе отсутствует';
+                        profileBio.style.color = '#95a5a6';
+                        profileBio.style.fontStyle = 'italic';
+                    }
+                }
+
+                // Скрываем режим редактирования
+                if (bioTextarea) bioTextarea.style.display = 'none';
+                if (profileBio) profileBio.style.display = 'block';
+                if (bioControls) bioControls.style.display = 'none';
+
+                Modal.success('Информация о себе обновлена!');
+            } catch (error) {
+                console.error('Error updating bio:', error);
+                Modal.error('Ошибка обновления: ' + error.message);
+            }
+        });
+    }
+
+    if (bioCancelBtn) {
+        bioCancelBtn.addEventListener('click', () => {
+            // Отменяем изменения и скрываем режим редактирования
+            if (bioTextarea) {
+                bioTextarea.value = state.currentUser.bio || '';
+                bioTextarea.style.display = 'none';
+            }
+            if (profileBio) profileBio.style.display = 'block';
+            if (bioControls) bioControls.style.display = 'none';
         });
     }
 
@@ -1832,6 +2342,9 @@ document.addEventListener('DOMContentLoaded', async function() {
         addUserToSpace,
         showParticipants,
         kickUserFromSpace,
+        banUserFromSpace,
+        unbanUserFromSpace,
+        assignRoleToUser,
         leaveSpace,
         deleteSpace
     };

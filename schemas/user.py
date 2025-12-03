@@ -1,4 +1,4 @@
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 from typing import Optional
 from utils.validators import Validators
 
@@ -6,7 +6,7 @@ class UserCreate(BaseModel):
     nickname: str
     email: Optional[str] = None
     password: str
-    
+
     @field_validator('nickname')
     @classmethod
     def validate_nickname(cls, v):
@@ -14,7 +14,7 @@ class UserCreate(BaseModel):
         if not is_valid:
             raise ValueError(error)
         return Validators.sanitize_input(v)
-    
+
     @field_validator('email')
     @classmethod
     def validate_email(cls, v):
@@ -23,7 +23,7 @@ class UserCreate(BaseModel):
             if not is_valid:
                 raise ValueError(error)
         return v
-    
+
     @field_validator('password')
     @classmethod
     def validate_password(cls, v):
@@ -39,6 +39,7 @@ class UserOut(BaseModel):
     status: str
     avatar_url: Optional[str] = None
     profile_background_url: Optional[str] = None
+
 
 class Token(BaseModel):
     access_token: str

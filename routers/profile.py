@@ -9,8 +9,13 @@ from models.base import User
 router = APIRouter()
 
 @router.get("/me", response_model=MyProfileOut)
-async def get_my_profile(current_user: User = Depends(get_current_user)):
+async def get_my_profile(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
     """Получить свой профиль"""
+    # Обновляем данные из БД для гарантии актуальности
+    db.refresh(current_user)
     return current_user
 
 @router.patch("/me", response_model=MyProfileOut)

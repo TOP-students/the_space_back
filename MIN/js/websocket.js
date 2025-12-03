@@ -61,6 +61,13 @@ class WebSocketClient {
             }
         });
 
+        this.socket.on('user_kicked', (data) => {
+            console.log('User kicked:', data);
+            if (this.onUserKickedCallback) {
+                this.onUserKickedCallback(data);
+            }
+        });
+
         this.socket.on('error', (error) => {
             console.error('Socket error:', error);
         });
@@ -130,6 +137,11 @@ class WebSocketClient {
     // Установить обработчик выхода пользователей
     onUserLeft(callback) {
         this.onUserLeftCallback = callback;
+    }
+
+    // Установить обработчик кика пользователей
+    onUserKicked(callback) {
+        this.onUserKickedCallback = callback;
     }
 
     // Отключиться

@@ -65,67 +65,67 @@ async def get_available_permissions(
     
     return grouped
 
-@router.get("/{space_id}/my-permissions")
-async def get_my_permissions(
-    space_id: int,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    """Получить мои разрешения в комнате"""
-    role_repo = RoleRepository(db)
+# @router.get("/{space_id}/my-permissions")
+# async def get_my_permissions(
+#     space_id: int,
+#     current_user: User = Depends(get_current_user),
+#     db: Session = Depends(get_db)
+# ):
+#     """Получить мои разрешения в комнате"""
+#     role_repo = RoleRepository(db)
     
-    role = role_repo.get_user_role(current_user.id, space_id)
-    if not role:
-        raise HTTPException(status_code=403, detail="Вы не участник этой комнаты")
+#     role = role_repo.get_user_role(current_user.id, space_id)
+#     if not role:
+#         raise HTTPException(status_code=403, detail="Вы не участник этой комнаты")
     
-    permissions = role_repo.get_permissions(current_user.id, space_id)
+#     permissions = role_repo.get_permissions(current_user.id, space_id)
     
-    return {
-        "role": {
-            "id": role.id,
-            "name": role.name,
-            "color": role.color,
-            "priority": role.priority
-        },
-        "permissions": permissions
-    }
+#     return {
+#         "role": {
+#             "id": role.id,
+#             "name": role.name,
+#             "color": role.color,
+#             "priority": role.priority
+#         },
+#         "permissions": permissions
+#     }
 
-@router.post("/{space_id}/roles")
-async def create_role(
-    space_id: int,
-    role_data: RoleCreate,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    """Создать новую роль"""
-    role_repo = RoleRepository(db)
+# @router.post("/{space_id}/roles")
+# async def create_role(
+#     space_id: int,
+#     role_data: RoleCreate,
+#     current_user: User = Depends(get_current_user),
+#     db: Session = Depends(get_db)
+# ):
+#     """Создать новую роль"""
+#     role_repo = RoleRepository(db)
     
-    # проверка прав
-    if not role_repo.check_permission(current_user.id, space_id, Permission.PROMOTE_MEMBERS):
-        raise HTTPException(status_code=403, detail="У вас нет прав на создание ролей")
+#     # проверка прав
+#     if not role_repo.check_permission(current_user.id, space_id, Permission.PROMOTE_MEMBERS):
+#         raise HTTPException(status_code=403, detail="У вас нет прав на создание ролей")
     
-    # проверка что разрешения валидны
-    invalid_perms = [p for p in role_data.permissions if p not in Permission.ALL]
-    if invalid_perms:
-        raise HTTPException(status_code=400, detail=f"Неизвестные разрешения: {invalid_perms}")
+#     # проверка что разрешения валидны
+#     invalid_perms = [p for p in role_data.permissions if p not in Permission.ALL]
+#     if invalid_perms:
+#         raise HTTPException(status_code=400, detail=f"Неизвестные разрешения: {invalid_perms}")
     
-    # создание роли
-    new_role = role_repo.create(
-        space_id=space_id,
-        name=role_data.name,
-        permissions=role_data.permissions,
-        color=role_data.color,
-        priority=role_data.priority,
-        is_system=False
-    )
+#     # создание роли
+#     new_role = role_repo.create(
+#         space_id=space_id,
+#         name=role_data.name,
+#         permissions=role_data.permissions,
+#         color=role_data.color,
+#         priority=role_data.priority,
+#         is_system=False
+#     )
     
-    return {
-        "id": new_role.id,
-        "name": new_role.name,
-        "permissions": new_role.permissions,
-        "color": new_role.color,
-        "priority": new_role.priority
-    }
+#     return {
+#         "id": new_role.id,
+#         "name": new_role.name,
+#         "permissions": new_role.permissions,
+#         "color": new_role.color,
+#         "priority": new_role.priority
+#     }
 
 @router.patch("/{space_id}/roles/{role_id}")
 async def update_role(
@@ -236,3 +236,17 @@ async def get_role_members(
         "display_name": user.display_name,
         "avatar_url": user.avatar_url
     } for user in members]
+
+def get_role_hierarchy(self, space_id: int):
+        """Получить иерархию ролей для UI"""
+        roles = self.get_by_space(space_id)
+        
+        return [{
+            "id": role.id,
+            "name": role.name,
+            "color": role.color,
+            "priority": role.priority,
+            "is_system": role.is_system,
+            "member_count": self.db.query(UserRole).filter(UserRole.role_id == role.id).count(),
+            "permissions": role.permissions
+        } for role in roles]

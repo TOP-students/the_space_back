@@ -20,3 +20,16 @@ class BanRepository:
             Ban.user_id == user_id, Ban.space_id == space_id,
             or_(Ban.until > now, Ban.until.is_(None))
         ).first() is not None
+
+    def remove(self, user_id: int, space_id: int):
+        """Удалить бан пользователя"""
+        bans = self.db.query(Ban).filter(
+            Ban.user_id == user_id,
+            Ban.space_id == space_id
+        ).all()
+
+        for ban in bans:
+            self.db.delete(ban)
+
+        self.db.commit()
+        return len(bans) > 0

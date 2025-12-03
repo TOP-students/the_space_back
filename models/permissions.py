@@ -139,18 +139,37 @@ class RolePreset:
     RESTRICTED = {
         "name": "Ограниченный",
         "permissions": [
-            Permission.SEND_MESSAGES,
         ],
         "color": "#808080",
         "priority": 5,
         "is_system": False
     }
 
+# иерархия ролей (чем больше число, тем выше роль)
+class RoleHierarchy:
+    LEVELS = {
+        "Ограниченный": 0,
+        "Участник": 1,
+        "Модератор": 2,
+        "Владелец": 3
+    }
+
+    @staticmethod
+    def get_level(role_name: str) -> int:
+        """Получить уровень роли"""
+        return RoleHierarchy.LEVELS.get(role_name, 0)
+
+    @staticmethod
+    def can_moderate(moderator_role: str, target_role: str) -> bool:
+        """Проверить, может ли moderator управлять target"""
+        moderator_level = RoleHierarchy.get_level(moderator_role)
+        target_level = RoleHierarchy.get_level(target_role)
+        return moderator_level > target_level
+
 
 def has_permission(user_permissions: list, required_permission: str) -> bool:
     """Проверить наличие разрешения у пользователя"""
     return required_permission in user_permissions
-
 
 def get_permission_info(permission: str) -> dict:
     """Получить информацию о разрешении для UI"""

@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from typing import List
 from sqlalchemy.orm import Session
 
-from schemas.space import SpaceCreate, SpaceOut, BanCreate
+from schemas.space import SpaceCreate, SpaceOut, BanCreate, RoleCreate, RoleOut
 from utils.auth import get_current_user, check_permissions, get_db
 from models.base import User, Space
 from crud.space import SpaceRepository
@@ -13,18 +13,49 @@ router = APIRouter()
 
 @router.post("/", response_model=SpaceOut)
 async def create_space(
-    space: SpaceCreate, 
+    space: SpaceCreate,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Создание новой комнаты"""
+    from models.permissions import RolePreset
+
     space_repo = SpaceRepository(db)
+    role_repo = RoleRepository(db)
+
+    # Создаём пространство
     new_space = space_repo.create(
-        space.name, 
-        space.description or None, 
-        current_user.id, 
+        space.name,
+        space.description or None,
+        current_user.id,
         space.background_url or None
     )
+
+    # Создаём базовые роли
+    owner_role = role_repo.create(
+        new_space.id,
+        RolePreset.OWNER["name"],
+        RolePreset.OWNER["permissions"],
+        RolePreset.OWNER["color"]
+    )
+
+    moderator_role = role_repo.create(
+        new_space.id,
+        RolePreset.MODERATOR["name"],
+        RolePreset.MODERATOR["permissions"],
+        RolePreset.MODERATOR["color"]
+    )
+
+    member_role = role_repo.create(
+        new_space.id,
+        RolePreset.MEMBER["name"],
+        RolePreset.MEMBER["permissions"],
+        RolePreset.MEMBER["color"]
+    )
+
+    # Назначаем создателю роль владельца
+    role_repo.assign_to_user(current_user.id, owner_role.id)
+
     return new_space
 
 @router.get("/")
@@ -113,8 +144,7 @@ async def get_participants(
             {
                 "id": user.id,
                 "nickname": user.nickname,
-                "status": user.status,
-                "avatar_url": user.avatar_url
+                "status": user.status
             } for user in participants
         ]
     }
@@ -127,15 +157,68 @@ async def kick_user(
     db: Session = Depends(get_db)
 ):
     """Исключить пользователя из комнаты"""
+    from models.permissions import Permission, RoleHierarchy
+    from models.base import Role, UserRole, Chat
+    from utils.socketio_instance import sio
+
     space_repo = SpaceRepository(db)
     role_repo = RoleRepository(db)
-    
-    # проверка прав (упрощённая - только админ может кикать)
+
+    # Проверка существования пространства
     space = space_repo.get_by_id(space_id)
-    if not space or space.admin_id != current_user.id:
-        raise HTTPException(status_code=403, detail="У вас нет прав на это действие")
-    
+    if not space:
+        raise HTTPException(status_code=404, detail="Пространство не найдено")
+
+    # Проверка прав - админ или разрешение KICK_MEMBERS
+    if not (space.admin_id == current_user.id or
+            role_repo.check_permission(current_user.id, space_id, Permission.KICK_MEMBERS)):
+        raise HTTPException(status_code=403, detail="У вас нет прав на исключение пользователей")
+
+    # Нельзя кикнуть админа
+    if user_id == space.admin_id:
+        raise HTTPException(status_code=403, detail="Нельзя исключить администратора пространства")
+
+    # Проверка иерархии ролей
+    current_user_role = db.query(UserRole).join(Role).filter(
+        UserRole.user_id == current_user.id,
+        Role.space_id == space_id
+    ).first()
+
+    target_user_role = db.query(UserRole).join(Role).filter(
+        UserRole.user_id == user_id,
+        Role.space_id == space_id
+    ).first()
+
+    # Если не владелец, проверяем иерархию
+    if space.admin_id != current_user.id:
+        if not current_user_role or not current_user_role.role:
+            raise HTTPException(status_code=403, detail="У вас нет роли в этом пространстве")
+
+        if target_user_role and target_user_role.role:
+            if not RoleHierarchy.can_moderate(current_user_role.role.name, target_user_role.role.name):
+                raise HTTPException(status_code=403, detail="Вы не можете исключить пользователя с такой же или более высокой ролью")
+
+    # Получаем информацию о пользователе для события
+    kicked_user = db.query(User).filter(User.id == user_id).first()
+
+    # Получаем chat_id пространства
+    chat = db.query(Chat).filter(
+        Chat.space_id == space_id,
+        Chat.type == "group"
+    ).first()
+
     space_repo.kick(space_id, user_id)
+
+    # Отправляем WebSocket-событие о кике пользователя
+    if chat and kicked_user:
+        room_id = str(chat.id)
+        await sio.emit('user_kicked', {
+            'space_id': space_id,
+            'room_id': room_id,
+            'user_id': user_id,
+            'nickname': kicked_user.nickname
+        }, room=room_id)
+
     return {"message": "Пользователь исключён из комнаты"}
 
 @router.post("/{space_id}/ban/{user_id}")
@@ -147,27 +230,170 @@ async def ban_user(
     db: Session = Depends(get_db)
 ):
     """Забанить пользователя в комнате"""
+    from models.permissions import Permission, RoleHierarchy
+    from models.base import Role, UserRole
+
     space_repo = SpaceRepository(db)
     ban_repo = BanRepository(db)
-    
-    # проверка прав (только админ)
+    role_repo = RoleRepository(db)
+
+    # Проверка существования пространства
     space = space_repo.get_by_id(space_id)
-    if not space or space.admin_id != current_user.id:
-        raise HTTPException(status_code=403, detail="У вас нет прав на бан")
-    
-    # создание бана
+    if not space:
+        raise HTTPException(status_code=404, detail="Пространство не найдено")
+
+    # Проверка прав - админ или разрешение BAN_MEMBERS
+    if not (space.admin_id == current_user.id or
+            role_repo.check_permission(current_user.id, space_id, Permission.BAN_MEMBERS)):
+        raise HTTPException(status_code=403, detail="У вас нет прав на бан пользователей")
+
+    # Нельзя забанить админа
+    if user_id == space.admin_id:
+        raise HTTPException(status_code=403, detail="Нельзя забанить администратора пространства")
+
+    # Проверка иерархии ролей
+    current_user_role = db.query(UserRole).join(Role).filter(
+        UserRole.user_id == current_user.id,
+        Role.space_id == space_id
+    ).first()
+
+    target_user_role = db.query(UserRole).join(Role).filter(
+        UserRole.user_id == user_id,
+        Role.space_id == space_id
+    ).first()
+
+    # Если не владелец, проверяем иерархию
+    if space.admin_id != current_user.id:
+        if not current_user_role or not current_user_role.role:
+            raise HTTPException(status_code=403, detail="У вас нет роли в этом пространстве")
+
+        if target_user_role and target_user_role.role:
+            if not RoleHierarchy.can_moderate(current_user_role.role.name, target_user_role.role.name):
+                raise HTTPException(status_code=403, detail="Вы не можете забанить пользователя с такой же или более высокой ролью")
+
+    # Создание бана
     ban_repo.create(
-        user_id, 
-        current_user.id, 
-        space_id, 
-        ban_data.reason or None, 
+        user_id,
+        current_user.id,
+        space_id,
+        ban_data.reason or None,
         ban_data.until
     )
-    
-    # кик пользователя
-    space_repo.kick(space_id, user_id)
-    
+
+    # Забаненный пользователь остается в чате, но не может писать
     return {"message": "Пользователь забанен"}
+
+@router.delete("/{space_id}/unban/{user_id}")
+async def unban_user(
+    space_id: int,
+    user_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Разбанить пользователя"""
+    from models.permissions import Permission
+    from crud.ban import BanRepository
+
+    space_repo = SpaceRepository(db)
+    ban_repo = BanRepository(db)
+    role_repo = RoleRepository(db)
+
+    # Проверка существования пространства
+    space = space_repo.get_by_id(space_id)
+    if not space:
+        raise HTTPException(status_code=404, detail="Пространство не найдено")
+
+    # Проверка прав - админ или разрешение BAN_MEMBERS
+    if not (space.admin_id == current_user.id or
+            role_repo.check_permission(current_user.id, space_id, Permission.BAN_MEMBERS)):
+        raise HTTPException(status_code=403, detail="У вас нет прав на управление банами")
+
+    # Удаляем бан
+    removed = ban_repo.remove(user_id, space_id)
+
+    if not removed:
+        raise HTTPException(status_code=404, detail="Активный бан не найден")
+
+    return {"message": "Пользователь разбанен"}
+
+@router.get("/{space_id}/my-permissions")
+async def get_my_permissions(
+    space_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Получить права текущего пользователя в пространстве"""
+    from models.base import Role, UserRole
+
+    space_repo = SpaceRepository(db)
+    role_repo = RoleRepository(db)
+
+    # Проверка существования пространства
+    space = space_repo.get_by_id(space_id)
+    if not space:
+        raise HTTPException(status_code=404, detail="Пространство не найдено")
+
+    # Если пользователь - админ, возвращаем все права
+    if space.admin_id == current_user.id:
+        from models.permissions import Permission
+        return {
+            "is_admin": True,
+            "permissions": Permission.ALL,
+            "role": {"name": "Владелец", "color": "#FF0000"}
+        }
+
+    # Получаем роль пользователя
+    permissions = role_repo.get_permissions(current_user.id, space_id)
+    user_role = db.query(UserRole).join(Role).filter(
+        UserRole.user_id == current_user.id,
+        Role.space_id == space_id
+    ).first()
+
+    role_info = None
+    if user_role and user_role.role:
+        role_info = {
+            "name": user_role.role.name,
+            "color": user_role.role.color
+        }
+
+    return {
+        "is_admin": False,
+        "permissions": permissions,
+        "role": role_info
+    }
+
+@router.post("/{space_id}/roles", response_model=RoleOut)
+async def create_role(
+    space_id: int,
+    role_data: RoleCreate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Создать кастомную роль (только для админов и модераторов с правами)"""
+    from models.permissions import Permission
+
+    role_repo = RoleRepository(db)
+    space_repo = SpaceRepository(db)
+
+    # Проверка существования пространства
+    space = space_repo.get_by_id(space_id)
+    if not space:
+        raise HTTPException(status_code=404, detail="Пространство не найдено")
+
+    # Проверка прав - нужно разрешение MANAGE_ROLES или быть админом
+    if not (space.admin_id == current_user.id or
+            role_repo.check_permission(current_user.id, space_id, Permission.MANAGE_ROLES)):
+        raise HTTPException(status_code=403, detail="У вас нет прав на создание ролей")
+
+    # Создаём роль
+    new_role = role_repo.create(
+        space_id,
+        role_data.name,
+        role_data.permissions or [],
+        role_data.color or "#808080"
+    )
+
+    return new_role
 
 @router.post("/{space_id}/assign-role/{user_id}/{role_id}")
 async def assign_role(
@@ -178,14 +404,41 @@ async def assign_role(
     db: Session = Depends(get_db)
 ):
     """Назначить роль пользователю"""
-    from models.permissions import Permission
-    
+    from models.permissions import Permission, RoleHierarchy
+    from models.base import Role, UserRole
+
     role_repo = RoleRepository(db)
-    
+    space_repo = SpaceRepository(db)
+
     # проверка прав - нужно разрешение MANAGE_ROLES
     if not role_repo.check_permission(current_user.id, space_id, Permission.MANAGE_ROLES):
         raise HTTPException(status_code=403, detail="У вас нет прав на назначение ролей")
-    
+
+    # Получаем роль, которую хотим назначить
+    target_role = db.query(Role).filter(Role.id == role_id).first()
+    if not target_role:
+        raise HTTPException(status_code=404, detail="Роль не найдена")
+
+    # Проверка пространства
+    space = space_repo.get_by_id(space_id)
+    if not space:
+        raise HTTPException(status_code=404, detail="Пространство не найдено")
+
+    # Если не владелец, проверяем иерархию
+    if space.admin_id != current_user.id:
+        # Получаем роль того, кто назначает
+        current_user_role = db.query(UserRole).join(Role).filter(
+            UserRole.user_id == current_user.id,
+            Role.space_id == space_id
+        ).first()
+
+        if not current_user_role or not current_user_role.role:
+            raise HTTPException(status_code=403, detail="У вас нет роли в этом пространстве")
+
+        # Проверяем, может ли модератор назначать эту роль
+        if not RoleHierarchy.can_moderate(current_user_role.role.name, target_role.name):
+            raise HTTPException(status_code=403, detail="Вы не можете назначать роль такого же или более высокого уровня")
+
     role_repo.assign_to_user(user_id, role_id)
     return {"message": "Роль успешно назначена"}
 
