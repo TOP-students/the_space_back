@@ -48,7 +48,7 @@ class User(Base):
     profile_background_url = Column(String(500)) # фон профиля
     display_name = Column(String(100))  # отображаемое имя (может отличаться от nickname)
 
-    user_roles = relationship("UserRole", back_populates="user")
+    # user_roles = relationship("UserRole", back_populates="user")
 
 class UserRole(Base):
     __tablename__ = "user_roles"
@@ -56,11 +56,16 @@ class UserRole(Base):
     user_id = Column(BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     role_id = Column(BigInteger, ForeignKey("roles.id", ondelete="CASCADE"), nullable=False, index=True)
     assigned_at = Column(DateTime(timezone=True), server_default=func.now())
-
-    role = relationship("Role", back_populates="user_roles")
-    user = relationship("User", back_populates="user_roles")
-
     __table_args__ = (Index('ix_user_roles_user_role', 'user_id', 'role_id'),)
+
+class UserActivity(Base):
+    __tablename__ = "user_activity"
+    user_id = Column(BigInteger, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    last_seen = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    status = Column(String(20), default="offline")  # online, offline, away, dnd
+    is_active = Column(Boolean, default=False)
+    device_info = Column(String(255))
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 class Chat(Base):
     __tablename__ = "chats"
@@ -118,11 +123,11 @@ class Role(Base):
     id = Column(BigInteger, primary_key=True, index=True, autoincrement=True)
     space_id = Column(BigInteger, ForeignKey("spaces.id", ondelete="CASCADE"), nullable=False, index=True)
     name = Column(String(50), nullable=False)
-    permissions = Column(JSON)
+    permissions = Column(JSON)  # список разрешений
     color = Column(String(7))
+    priority = Column(Integer, default=10)  # выше = больше прав
+    is_system = Column(Boolean, default=False)  # системную роль нельзя удалить
     created_at = Column(DateTime(timezone=True), server_default=func.now())
-
-    user_roles = relationship("UserRole", back_populates="role")
 
 class Space(Base):
     __tablename__ = "spaces"

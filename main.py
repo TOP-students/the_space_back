@@ -2,9 +2,8 @@ from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 import socketio
-
 from models.base import Base, SessionLocal, engine
-from routers import auth, spaces, messages, profile, notifications, stickers
+from routers import auth, spaces, messages, profile, notifications, stickers, roles, status
 from crud.user import UserRepository
 from crud.space import SpaceRepository
 from crud.message import MessageRepository
@@ -13,7 +12,7 @@ from crud.ban import BanRepository
 
 app = FastAPI()
 
-# Инициализация Socket.IO сервера
+# инициализация Socket.IO сервера
 sio = socketio.AsyncServer(
     async_mode='asgi',
     cors_allowed_origins='*',
@@ -51,6 +50,8 @@ app.include_router(messages.router, prefix="/messages", tags=["messages"])
 app.include_router(profile.router, prefix="/profile", tags=["profile"])
 app.include_router(notifications.router, prefix="/notifications", tags=["notifications"])
 app.include_router(stickers.router, prefix="/stickers", tags=["stickers"])
+app.include_router(roles.router, prefix="/spaces", tags=["roles"])
+app.include_router(status.router, prefix="/status", tags=["status"])
 
 # создание таблиц
 Base.metadata.create_all(bind=engine)
@@ -71,15 +72,15 @@ async def root():
 async def health_check():
     return {"status": "ok"}
 
-# Сохраняем глобальный инстанс Socket.IO
+# сохраняем глобальный инстанс Socket.IO
 from utils.socketio_instance import set_sio
 set_sio(sio)
 
-# Импорт обработчиков Socket.IO (после создания sio)
+# импорт обработчиков Socket.IO (после создания sio)
 from utils.socketio_handlers import register_socketio_handlers
 register_socketio_handlers(sio)
 
-# Обёртка FastAPI приложения в Socket.IO
+# обёртка FastAPI приложения в Socket.IO
 app_with_socketio = socketio.ASGIApp(sio, app)
 
 if __name__ == "__main__":

@@ -169,24 +169,6 @@ async def ban_user(
     
     return {"message": "Пользователь забанен"}
 
-@router.get("/{space_id}/roles")
-async def get_space_roles(
-    space_id: int,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    """Получить список ролей комнаты"""
-    from models.base import Role
-    
-    roles = db.query(Role).filter(Role.space_id == space_id).all()
-    
-    return [{
-        "id": role.id,
-        "name": role.name,
-        "permissions": role.permissions,
-        "color": role.color
-    } for role in roles]
-
 @router.post("/{space_id}/assign-role/{user_id}/{role_id}")
 async def assign_role(
     space_id: int,

@@ -5,18 +5,16 @@ from typing import Optional
 from sqlalchemy.orm import Session
 import os
 from dotenv import load_dotenv
+from models.base import SessionLocal, User, verify_password
 
-# Загружаем переменные окружения
 load_dotenv()
 
-# Попробуем сначала python-jose, если нет - используем PyJWT
+# пробуем сначала python-jose, если нет - используем PyJWT
 try:
     from jose import JWTError, jwt
 except ImportError:
     import jwt
     JWTError = jwt.InvalidTokenError
-
-from models.base import SessionLocal, User, verify_password
 
 # Конфигурация JWT
 SECRET_KEY = os.getenv("SECRET_KEY", "your-super-secret-key-change-me-in-production-12345")
@@ -43,7 +41,7 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
     
     to_encode.update({"exp": expire})
     
-    # Проверяем какая библиотека используется
+    # проверяем какая библиотека используется
     try:
         from jose import jwt as jose_jwt
         encoded_jwt = jose_jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
@@ -52,6 +50,12 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
         encoded_jwt = pyjwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     
     return encoded_jwt
+
+async def update_user_activity_middleware(user_id: int, db: Session):
+    """Обновить активность при каждом запросе"""
+    from crud.activity import ActivityRepository
+    activity_repo = ActivityRepository(db)
+    activity_repo.update_activity(user_id, status="online")
 
 async def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)) -> User:
     """Получение текущего пользователя из JWT токена"""
@@ -62,7 +66,6 @@ async def get_current_user(token: str = Depends(oauth2_scheme), db: Session = De
     )
     
     try:
-        # Декодируем токен
         try:
             from jose import jwt as jose_jwt
             payload = jose_jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
@@ -77,10 +80,12 @@ async def get_current_user(token: str = Depends(oauth2_scheme), db: Session = De
     except JWTError:
         raise credentials_exception
     
-    # Получаем пользователя из БД
     user = db.query(User).filter(User.id == int(user_id)).first()
     if user is None:
         raise credentials_exception
+    
+    # обновление активности
+    await update_user_activity_middleware(user.id, db)
     
     return user
 
@@ -88,7 +93,7 @@ def check_permissions(db: Session, user_id: int, space_id: int, required_permiss
     """Проверка прав доступа (упрощённая версия для прототипа)"""
     from models.base import Space
     
-    # Проверяем, является ли пользователь админом комнаты
+    # проверка на админа комнаты
     space = db.query(Space).filter(Space.id == space_id).first()
     if space and space.admin_id == user_id:
         return True
