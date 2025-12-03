@@ -203,6 +203,36 @@ document.addEventListener('DOMContentLoaded', async function() {
                 console.log('Room mismatch, ignoring reaction update');
             }
         });
+
+        // Обработчик кика пользователя
+        state.wsClient.onUserKicked((data) => {
+            console.log('WS: User kicked from space', data);
+
+            // Если кикнули нас самих - возвращаемся к списку пространств
+            if (data.user_id == state.currentUser.id) {
+                Modal.warning('Вы были исключены из пространства');
+                // Покидаем пространство
+                state.currentSpace = null;
+                state.currentChatId = null;
+                // Перезагружаем список пространств
+                loadSpaces();
+                // Очищаем чат
+                chatMainElement.innerHTML = `
+                    <div class="empty-chat-message">
+                        <img src="assets/icons/cat.svg" alt="Кот" class="empty-chat-cat">
+                        <p>Выберите чат для общения</p>
+                    </div>
+                `;
+                sidebarRightContent.innerHTML = `
+                    <div class="sidebar-right-empty">
+                        <p>Выберите чат, чтобы увидеть информацию</p>
+                    </div>
+                `;
+            } else if (state.currentSpace && data.space_id == state.currentSpace.id) {
+                // Если кикнули кого-то другого в текущем пространстве - обновляем список участников
+                updateChatInfo();
+            }
+        });
     }
 
     // Обновить профиль пользователя

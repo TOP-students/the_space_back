@@ -185,7 +185,8 @@ async def kick_user(
 ):
     """Исключить пользователя из комнаты"""
     from models.permissions import Permission, RoleHierarchy
-    from models.base import Role, UserRole
+    from models.base import Role, UserRole, Chat
+    from utils.socketio_instance import sio
 
     space_repo = SpaceRepository(db)
     role_repo = RoleRepository(db)
@@ -224,7 +225,27 @@ async def kick_user(
             if not RoleHierarchy.can_moderate(current_user_role.role.name, target_user_role.role.name):
                 raise HTTPException(status_code=403, detail="Вы не можете исключить пользователя с такой же или более высокой ролью")
 
+    # Получаем информацию о пользователе для события
+    kicked_user = db.query(User).filter(User.id == user_id).first()
+
+    # Получаем chat_id пространства
+    chat = db.query(Chat).filter(
+        Chat.space_id == space_id,
+        Chat.type == "group"
+    ).first()
+
     space_repo.kick(space_id, user_id)
+
+    # Отправляем WebSocket-событие о кике пользователя
+    if chat and kicked_user:
+        room_id = str(chat.id)
+        await sio.emit('user_kicked', {
+            'space_id': space_id,
+            'room_id': room_id,
+            'user_id': user_id,
+            'nickname': kicked_user.nickname
+        }, room=room_id)
+
     return {"message": "Пользователь исключён из комнаты"}
 
 @router.post("/{space_id}/ban/{user_id}")

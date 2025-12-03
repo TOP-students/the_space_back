@@ -1766,3 +1766,581 @@ cloudinary>=1.36.0
 17. `requirements.txt` - cloudinary
 
 ---
+
+## 2025-12-03 - Система ролей с иерархией и переработка банов
+
+### Общая концепция
+
+Реализована трехуровневая система ролей с четкой иерархией прав и полностью переработан механизм банов. Модераторы теперь не могут управлять участниками с равным или высшим рангом, а забаненные пользователи остаются в чате с ограниченными правами.
+
+---
+
+### Иерархия ролей
+
+**Файл:** `models/permissions.py`
+
+Создан класс `RoleHierarchy` для управления уровнями доступа:
+
+```python
+class RoleHierarchy:
+    LEVELS = {
+        "Участник": 1,
+        "Модератор": 2,
+        "Владелец": 3
+    }
+
+    @staticmethod
+    def get_level(role_name: str) -> int:
+        return RoleHierarchy.LEVELS.get(role_name, 0)
+
+    @staticmethod
+    def can_moderate(moderator_role: str, target_role: str) -> bool:
+        moderator_level = RoleHierarchy.get_level(moderator_role)
+        target_level = RoleHierarchy.get_level(target_role)
+        return moderator_level > target_level
+```
+
+#### Правила иерархии:
+- **Владелец** (уровень 3) - может управлять всеми
+- **Модератор** (уровень 2) - может управлять только участниками
+- **Участник** (уровень 1) - не может управлять никем
+
+---
+
+### Проверка прав в backend
+
+**Файл:** `routers/spaces.py`
+
+#### Кик участника (`DELETE /{space_id}/kick/{user_id}`):
+```python
+# Получаем роли модератора и цели
+moderator_role = role_repo.get_user_role_in_space(current_user.id, space_id)
+target_role = role_repo.get_user_role_in_space(user_id, space_id)
+
+# Проверяем иерархию
+if not RoleHierarchy.can_moderate(moderator_role.name, target_role.name):
+    raise HTTPException(
+        status_code=403,
+        detail="Вы не можете выгнать пользователя с этой ролью"
+    )
+```
+
+#### Бан участника (`POST /{space_id}/ban/{user_id}`):
+```python
+# Аналогичная проверка иерархии перед баном
+if not RoleHierarchy.can_moderate(moderator_role.name, target_role.name):
+    raise HTTPException(
+        status_code=403,
+        detail="Вы не можете забанить пользователя с этой ролью"
+    )
+```
+
+#### Назначение роли (`PATCH /{space_id}/roles/{user_id}`):
+```python
+# Проверяем, может ли текущий пользователь назначать целевую роль
+assigner_role = role_repo.get_user_role_in_space(current_user.id, space_id)
+target_new_role_obj = role_repo.get_role_by_name(space_id, body.new_role_name)
+
+if not RoleHierarchy.can_moderate(assigner_role.name, target_new_role_obj.name):
+    raise HTTPException(
+        status_code=403,
+        detail="Вы не можете назначать эту роль"
+    )
+```
+
+---
+
+### Переработка системы банов
+
+#### Концепция:
+- Забаненные пользователи **остаются в чате** как участники
+- Они могут **читать сообщения**, но **не могут взаимодействовать**
+- Запрещено: отправка сообщений, реакции, загрузка файлов
+- Модераторы могут **отменить бан**
+
+#### Удален автоматический кик при бане:
+
+**Файл:** `routers/spaces.py` (строки 283-284)
+
+**Было:**
+```python
+space_repo.kick(space_id, user_id)  # Удаление из чата
+```
+
+**Стало:**
+```python
+# Кик удален - пользователь остается в чате
+```
+
+#### Добавлено поле `is_banned` в API:
+
+**Файл:** `routers/spaces.py` (`GET /{space_id}/participants`)
+
+```python
+participants_data = []
+for user in participants:
+    is_banned = ban_repo.is_active(user.id, space_id)
+    participants_data.append({
+        "id": user.id,
+        "nickname": user.nickname,
+        "status": user.status,
+        "avatar_url": user.avatar_url,
+        "is_banned": is_banned  # Новое поле
+    })
+```
+
+---
+
+### Проверки бана на сервере
+
+#### WebSocket - отправка сообщений:
+
+**Файл:** `utils/socketio_handlers.py`
+
+```python
+@sio.event
+async def send_message(sid, data):
+    # Проверяем бан перед отправкой
+    chat = db.query(Chat).filter(Chat.id == int(room_id)).first()
+    if chat and chat.space_id:
+        if ban_repo.is_active(int(user_id), chat.space_id):
+            await sio.emit('error', {
+                'message': 'Вы забанены и не можете отправлять сообщения'
+            }, room=sid)
+            return
+```
+
+#### REST API - реакции и файлы:
+
+**Файл:** `routers/messages.py`
+
+Добавлены проверки в эндпоинты:
+- `POST /{chat_id}/{message_id}/react` (строки 81-85)
+- `POST /{chat_id}/upload-image` (строки 292-296)
+- `POST /{chat_id}/upload-audio` (строки 365-369)
+- `POST /{chat_id}/upload-document` (строки 436-440)
+
+```python
+# Проверяем, не забанен ли пользователь
+chat = db.query(Chat).filter(Chat.id == chat_id).first()
+if chat and chat.space_id:
+    if ban_repo.is_active(current_user.id, chat.space_id):
+        raise HTTPException(
+            status_code=403,
+            detail="Вы забанены в этом пространстве"
+        )
+```
+
+---
+
+### Функция разбана
+
+**Файл:** `crud/ban.py`
+
+Новый метод для удаления бана:
+
+```python
+def remove(self, user_id: int, space_id: int):
+    """Удаляет все активные баны пользователя в пространстве"""
+    bans = self.db.query(Ban).filter(
+        Ban.user_id == user_id,
+        Ban.space_id == space_id
+    ).all()
+
+    for ban in bans:
+        self.db.delete(ban)
+
+    self.db.commit()
+    return len(bans) > 0
+```
+
+**Файл:** `routers/spaces.py`
+
+Эндпоинт разбана (`DELETE /{space_id}/unban/{user_id}`):
+
+```python
+@router.delete("/{space_id}/unban/{user_id}")
+async def unban_user(
+    space_id: int,
+    user_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Разбанить пользователя (доступно админу и модераторам)"""
+    space_repo = SpaceRepository(db)
+    role_repo = RoleRepository(db)
+    ban_repo = BanRepository(db)
+
+    space = space_repo.get_by_id(space_id)
+
+    # Проверка прав
+    if not (space.admin_id == current_user.id or
+            role_repo.check_permission(current_user.id, space_id, Permission.BAN_MEMBERS)):
+        raise HTTPException(
+            status_code=403,
+            detail="У вас нет прав на управление банами"
+        )
+
+    removed = ban_repo.remove(user_id, space_id)
+    if not removed:
+        raise HTTPException(
+            status_code=404,
+            detail="Активный бан не найден"
+        )
+
+    return {"message": "Пользователь разбанен"}
+```
+
+---
+
+### Frontend - Иконка бана
+
+**Файл:** `MIN/css/stylechat.css`
+
+Добавлены стили для иконки:
+
+```css
+.ban-icon {
+    margin-left: 6px;
+    font-size: 14px;
+    opacity: 0.8;
+    cursor: help;
+}
+```
+
+**Файл:** `MIN/js/chat.js`
+
+#### Отображение иконки в модальном окне участников:
+```javascript
+function showParticipants(spaceId) {
+    members.forEach(member => {
+        const banIcon = member.is_banned
+            ? '<span class="ban-icon" title="Забанен">🚫</span>'
+            : '';
+
+        membersList.innerHTML += `
+            <div class="participant-item">
+                ${member.nickname}${banIcon}
+            </div>
+        `;
+    });
+}
+```
+
+#### Отображение в правой панели:
+```javascript
+async function updateChatInfo() {
+    sorted.forEach(member => {
+        const banIcon = member.is_banned
+            ? '<span class="ban-icon" title="Забанен">🚫</span>'
+            : '';
+
+        html += `
+            <div class="chat-member-item">
+                ${member.nickname}${banIcon}
+            </div>
+        `;
+    });
+}
+```
+
+#### Отображение в списке участников при обновлении:
+```javascript
+async function refreshParticipantsList(spaceId) {
+    participants.forEach(p => {
+        const banIcon = p.is_banned
+            ? '<span class="ban-icon" title="Забанен">🚫</span>'
+            : '';
+
+        listHtml += `<div>${p.nickname}${banIcon}</div>`;
+    });
+}
+```
+
+---
+
+### Frontend - Контекстные меню
+
+**Файл:** `MIN/js/chat.js`
+
+#### Проверка иерархии в меню участников:
+
+```javascript
+function initParticipantContextMenu(spaceId) {
+    const currentUserRole = getUserRoleInSpace(spaceId, state.currentUser.id);
+    const targetUserRole = getUserRoleInSpace(spaceId, targetUserId);
+
+    const canModerate = canUserModerate(currentUserRole, targetUserRole);
+
+    if (canModerate) {
+        // Показываем опции кика/бана/назначения роли
+    } else {
+        // Скрываем недоступные опции
+    }
+}
+```
+
+#### Утилита проверки иерархии:
+
+```javascript
+function canUserModerate(moderatorRole, targetRole) {
+    const hierarchy = {
+        'Владелец': 3,
+        'Модератор': 2,
+        'Участник': 1
+    };
+
+    const modLevel = hierarchy[moderatorRole] || 0;
+    const targetLevel = hierarchy[targetRole] || 0;
+
+    return modLevel > targetLevel;
+}
+```
+
+#### Динамическое меню в зависимости от статуса бана:
+
+```javascript
+if (isBanned) {
+    // Показываем кнопку "Разбанить"
+    contextMenuHTML += `
+        <div class="context-menu-item" onclick="unbanUserFromSpace(${spaceId}, ${userId})">
+            Разбанить
+        </div>
+    `;
+} else {
+    // Показываем "Кикнуть" и "Забанить"
+    contextMenuHTML += `
+        <div class="context-menu-item" onclick="kickUser(${spaceId}, ${userId})">
+            Кикнуть
+        </div>
+        <div class="context-menu-item" onclick="banUser(${spaceId}, ${userId})">
+            Забанить
+        </div>
+    `;
+}
+```
+
+---
+
+### Frontend - Функция разбана
+
+**Файл:** `MIN/js/chat.js`
+
+```javascript
+async function unbanUserFromSpace(spaceId, userId) {
+    // Закрываем контекстное меню
+    const contextMenu = document.querySelector('.participant-context-menu');
+    if (contextMenu) contextMenu.classList.remove('active');
+
+    const confirm = await Modal.confirm('Вы уверены, что хотите разбанить этого пользователя?');
+    if (!confirm) return;
+
+    try {
+        await API.unbanUser(spaceId, userId);
+        await Modal.success('Пользователь разбанен!');
+
+        // Обновляем списки
+        await refreshParticipantsList(spaceId);
+        await updateChatInfo();
+    } catch (error) {
+        await Modal.error('Ошибка: ' + error.message);
+    }
+}
+```
+
+**Файл:** `MIN/js/api.js`
+
+```javascript
+async unbanUser(spaceId, userId) {
+    return this.delete(`/spaces/${spaceId}/unban/${userId}`);
+}
+```
+
+---
+
+### Real-time обновления
+
+После модерационных действий вызывается `updateChatInfo()` для обновления правой панели:
+
+```javascript
+async function kickUser(spaceId, userId) {
+    await API.kickUser(spaceId, userId);
+    await Modal.success('Пользователь выгнан!');
+    await refreshParticipantsList(spaceId);
+    await updateChatInfo();  // Обновление в реальном времени
+}
+
+async function banUser(spaceId, userId) {
+    await API.banUser(spaceId, userId, reason);
+    await Modal.success('Пользователь забанен!');
+    await refreshParticipantsList(spaceId);
+    await updateChatInfo();  // Обновление в реальном времени
+}
+```
+
+---
+
+### Исправление дублирования ролей
+
+#### Проблема:
+При создании пространства роли создавались в двух местах - в `crud/space.py` и в `routers/spaces.py`, что приводило к дублям в списке ролей.
+
+#### Решение:
+
+**Файл:** `crud/space.py`
+
+Удален код создания ролей:
+
+**Было:**
+```python
+def create(self, name, admin_id, description=None):
+    # ... создание Space и Chat ...
+
+    # Создание ролей
+    default_roles = ["Владелец", "Модератор", "Участник"]
+    for role_name in default_roles:
+        role = Role(name=role_name, space_id=new_space.id)
+        self.db.add(role)
+```
+
+**Стало:**
+```python
+def create(self, name, admin_id, description=None):
+    # Только Space, Chat и ChatParticipant
+    # Роли создаются в routers/spaces.py
+```
+
+Теперь роли создаются **только в одном месте** - в эндпоинте создания пространства.
+
+#### Очистка существующих дублей:
+
+Создан и выполнен скрипт `cleanup_duplicate_roles.py`:
+- Находит дубликаты ролей в каждом пространстве
+- Оставляет по одному экземпляру каждой роли
+- Переназначает `UserRole` на сохраненные роли
+- Удаляет дублирующиеся записи
+
+Результат: Удалены дубли в пространстве #24 (дубликаты "Модератор" и "Участник")
+
+---
+
+### Исправление контекстного меню
+
+#### Проблема:
+Контекстное меню в правой панели не закрывалось после выбора действия (кик, бан, смена роли).
+
+#### Решение:
+
+Добавлен вызов `contextMenu.classList.remove('active')` в начале каждой функции:
+
+```javascript
+async function kickUser(spaceId, userId) {
+    const contextMenu = document.querySelector('.participant-context-menu');
+    if (contextMenu) contextMenu.classList.remove('active');
+    // ... остальная логика
+}
+
+async function banUser(spaceId, userId) {
+    const contextMenu = document.querySelector('.participant-context-menu');
+    if (contextMenu) contextMenu.classList.remove('active');
+    // ... остальная логика
+}
+```
+
+---
+
+### Обновление схем данных
+
+**Файл:** `schemas/space.py`
+
+Добавлен импорт `field_validator` для работы с валидаторами:
+
+```python
+from pydantic import BaseModel, Field, field_validator
+```
+
+**Файл:** `schemas/user.py`
+
+Аналогичное обновление импортов для совместимости с системой валидации.
+
+---
+
+### Git workflow
+
+#### Слияние с remote изменениями:
+
+После разработки системы ролей потребовалось объединить локальные изменения с коммитом backend-разработчика, который добавил:
+- @-теги и уведомления
+- Стикеры и паки стикеров
+- Систему валидации полей
+
+#### Процесс:
+1. Создан коммит локальных изменений
+2. Выполнен `git fetch origin`
+3. Выполнен `git rebase origin/main`
+4. Разрешены конфликты в `schemas/space.py` и `schemas/user.py`
+5. Выбрана версия с `utils.validators` от backend-разработчика
+6. Добавлен импорт `Field` для совместимости
+
+#### Конфликты:
+
+**schemas/user.py:**
+- Локально: inline валидация с regex
+- Remote: валидация через `utils.validators.Validators`
+- Решение: Оставлена версия с `Validators`, добавлен импорт `Field`
+
+**schemas/space.py:**
+- Локально: только `Field`
+- Remote: `field_validator` для валидации полей пространства
+- Решение: Объединены импорты `Field` и `field_validator`
+
+Rebase завершен успешно, коммиты объединены без потери функционала.
+
+---
+
+### Итоговый функционал
+
+#### Реализовано:
+- ✅ Трехуровневая иерархия ролей (Владелец > Модератор > Участник)
+- ✅ Проверка иерархии на backend во всех модерационных действиях
+- ✅ Проверка иерархии на frontend в контекстных меню
+- ✅ Переработка системы банов - пользователи остаются в чате
+- ✅ Блокировка отправки сообщений для забаненных
+- ✅ Блокировка реакций для забаненных
+- ✅ Блокировка загрузки файлов для забаненных
+- ✅ Иконка бана (🚫) во всех списках участников
+- ✅ Функция разбана для модераторов
+- ✅ Real-time обновление списков после модерации
+- ✅ Исправлено дублирование ролей
+- ✅ Исправлено закрытие контекстного меню
+- ✅ Успешное слияние с изменениями backend-разработчика
+
+#### Правила иерархии:
+- Владелец может управлять модераторами и участниками
+- Модераторы могут управлять только участниками
+- Модераторы НЕ могут кикать/банить других модераторов
+- Модераторы НЕ могут кикать/банить владельца
+- Модераторы НЕ могут назначать роль "Владелец"
+
+#### UX улучшения:
+- Визуальная индикация забаненных участников
+- Динамическое меню с опцией разбана для забаненных
+- Скрытие недоступных опций в зависимости от роли
+- Модальные подтверждения перед модерацией
+- Уведомления о статусе бана при попытке отправить сообщение
+- Автоматическое обновление UI после действий модерации
+
+#### Измененные файлы:
+1. `models/permissions.py` - класс RoleHierarchy
+2. `routers/spaces.py` - проверки иерархии, эндпоинт разбана, поле is_banned
+3. `routers/messages.py` - проверки бана в реакциях и загрузке файлов
+4. `utils/socketio_handlers.py` - проверка бана при отправке сообщений
+5. `crud/ban.py` - метод remove() для разбана
+6. `crud/space.py` - удалено дублирование создания ролей
+7. `schemas/space.py` - обновлены импорты
+8. `schemas/user.py` - обновлены импорты
+9. `MIN/js/chat.js` - иконки бана, проверка иерархии, функция разбана, обновления
+10. `MIN/js/api.js` - метод unbanUser()
+11. `MIN/css/stylechat.css` - стили иконки бана
+
+---
