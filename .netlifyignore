@@ -1,0 +1,14 @@
+# Игнорируем бэкенд-файлы при деплое фронтенда
+requirements.txt
+requirements_py314.txt
+*.py
+models/
+crud/
+routers/
+schemas/
+utils/
+alembic/
+__pycache__/
+*.pyc
+.env
+venv/

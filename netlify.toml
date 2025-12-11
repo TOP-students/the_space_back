@@ -1,6 +1,9 @@
 [build]
   publish = "MIN"
-  command = "echo 'No build command needed'"
+  # Пустая команда сборки - это статический сайт
+  command = ""
+  # Игнорируем автоматическую установку зависимостей
+  ignore = "git diff --quiet HEAD^ HEAD ."
 
 # Перенаправление корневого пути на страницу входа
 [[redirects]]
