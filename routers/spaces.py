@@ -1,6 +1,7 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, File, UploadFile
 from typing import List
 from sqlalchemy.orm import Session
+from datetime import datetime, timezone
 
 from schemas.space import SpaceCreate, SpaceOut, BanCreate, RoleCreate, RoleOut
 from utils.auth import get_current_user, check_permissions, get_db
@@ -8,6 +9,7 @@ from models.base import User, Space
 from crud.space import SpaceRepository
 from crud.ban import BanRepository
 from crud.role import RoleRepository
+from utils.file_upload import FileUploader
 
 router = APIRouter()
 
@@ -28,7 +30,8 @@ async def create_space(
         space.name,
         space.description or None,
         current_user.id,
-        space.background_url or None
+        space.background_url or None,
+        space.avatar_url or None
     )
 
     # Создаём базовые роли
@@ -89,7 +92,8 @@ async def get_all_spaces(
             "name": space.name,
             "description": space.description,
             "admin_id": space.admin_id,
-            "chat_id": chat.id if chat else None
+            "chat_id": chat.id if chat else None,
+            "avatar_url": space.avatar_url
         })
 
     return result
@@ -135,18 +139,69 @@ async def get_participants(
     db: Session = Depends(get_db)
 ):
     """Получить участников комнаты"""
+    from models.base import UserRole, Role, Ban
+
     space_repo = SpaceRepository(db)
     participants = space_repo.get_participants(space_id)
-    
+
+    # Получаем роли и баны для всех участников
+    result_participants = []
+    for user in participants:
+        # Получаем роль пользователя через join
+        role = db.query(Role).join(UserRole).filter(
+            UserRole.user_id == user.id,
+            Role.space_id == space_id
+        ).first()
+
+        role_info = None
+        role_permissions = []
+        if role:
+            # Получаем разрешения роли
+            role_repo = RoleRepository(db)
+            role_permissions = role_repo.get_permissions(user.id, space_id)
+
+            role_info = {
+                "id": role.id,
+                "name": role.name,
+                "color": role.color,
+                "priority": role.priority,
+                "permissions": role_permissions
+            }
+
+        # Проверяем бан
+        is_banned = False
+        try:
+            ban = db.query(Ban).filter(
+                Ban.user_id == user.id,
+                Ban.space_id == space_id
+            ).first()
+            if ban:
+                # Если until is None - перманентный бан
+                # Если until в будущем - временный бан ещё активен
+                if ban.until is None:
+                    is_banned = True
+                else:
+                    # Приводим оба времени к UTC для сравнения
+                    now = datetime.now(timezone.utc)
+                    ban_until = ban.until if ban.until.tzinfo else ban.until.replace(tzinfo=timezone.utc)
+                    is_banned = ban_until > now
+        except Exception as e:
+            print(f"Error checking ban: {e}")
+            is_banned = False
+
+        result_participants.append({
+            "id": user.id,
+            "nickname": user.nickname,
+            "display_name": user.display_name,
+            "status": user.status,
+            "avatar_url": user.avatar_url,
+            "role": role_info,
+            "is_banned": is_banned
+        })
+
     return {
         "space_id": space_id,
-        "participants": [
-            {
-                "id": user.id,
-                "nickname": user.nickname,
-                "status": user.status
-            } for user in participants
-        ]
+        "participants": result_participants
     }
 
 @router.delete("/{space_id}/kick/{user_id}")
@@ -344,16 +399,16 @@ async def get_my_permissions(
 
     # Получаем роль пользователя
     permissions = role_repo.get_permissions(current_user.id, space_id)
-    user_role = db.query(UserRole).join(Role).filter(
+    role = db.query(Role).join(UserRole).filter(
         UserRole.user_id == current_user.id,
         Role.space_id == space_id
     ).first()
 
     role_info = None
-    if user_role and user_role.role:
+    if role:
         role_info = {
-            "name": user_role.role.name,
-            "color": user_role.role.color
+            "name": role.name,
+            "color": role.color
         }
 
     return {
@@ -577,3 +632,43 @@ async def delete_space(
         db.rollback()
         print(f"Error deleting space: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Ошибка при удалении: {str(e)}")
+
+@router.post("/{space_id}/upload-avatar")
+async def upload_space_avatar(
+    space_id: int,
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Загрузить аватар пространства (только админ)"""
+    space_repo = SpaceRepository(db)
+
+    # Проверка существования пространства
+    space = space_repo.get_by_id(space_id)
+    if not space:
+        raise HTTPException(status_code=404, detail="Пространство не найдено")
+
+    # Проверка прав (только админ)
+    if space.admin_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Только администратор может изменять аватар пространства")
+
+    # Загрузка через Cloudinary
+    try:
+        result = await FileUploader.upload_image(file)
+        avatar_url = result["url"]
+
+        # Обновляем аватар пространства
+        space.avatar_url = avatar_url
+        db.commit()
+        db.refresh(space)
+
+        return {
+            "message": "Аватар пространства успешно загружен",
+            "avatar_url": avatar_url,
+            "space_id": space_id
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Ошибка загрузки аватара: {str(e)}")

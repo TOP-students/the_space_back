@@ -16,6 +16,40 @@ router = APIRouter()
 # FastAPI WebSocket код удалён - используем Socket.IO
 # См. utils/socketio_handlers.py для realtime функциональности
 
+@router.get("/message/{message_id}")
+def get_message_info(
+    message_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Получить информацию о конкретном сообщении (chat_id и space_id)"""
+    message_repo = MessageRepository(db)
+    message = message_repo.get_by_id(message_id)
+
+    if not message:
+        raise HTTPException(status_code=404, detail="Сообщение не найдено")
+
+    # Проверка что пользователь - участник чата
+    participant = db.query(ChatParticipant).filter(
+        ChatParticipant.chat_id == message.chat_id,
+        ChatParticipant.user_id == current_user.id,
+        ChatParticipant.is_active == True
+    ).first()
+
+    if not participant:
+        raise HTTPException(status_code=403, detail="У вас нет доступа к этому сообщению")
+
+    # Получаем информацию о чате
+    from models.base import Chat
+    chat = db.query(Chat).filter(Chat.id == message.chat_id).first()
+
+    return {
+        "message_id": message.id,
+        "chat_id": message.chat_id,
+        "space_id": chat.space_id if chat else None,
+        "content": message.content
+    }
+
 @router.post("/{chat_id}", response_model=MessageOut)
 def send_message(
     chat_id: int, 
@@ -258,8 +292,8 @@ def delete_message(
             # В приватных чатах можно удалять только свои сообщения
             raise HTTPException(status_code=403, detail="Вы можете удалять только свои сообщения")
 
-    # Удаляем сообщение
-    deleted_message = message_repo.delete(message_id, current_user.id)
+    # Удаляем сообщение (force=True если не автор, но есть права)
+    deleted_message = message_repo.delete(message_id, current_user.id, force=not is_author)
     if not deleted_message:
         raise HTTPException(status_code=400, detail="Не удалось удалить сообщение")
 

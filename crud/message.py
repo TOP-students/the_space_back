@@ -107,10 +107,28 @@ class MessageRepository:
             return message
         return None
 
-    def delete(self, message_id: int, user_id: int):
+    def delete(self, message_id: int, user_id: int, force: bool = False):
+        """
+        Удалить сообщение (мягкое удаление)
+
+        Args:
+            message_id: ID сообщения
+            user_id: ID пользователя
+            force: Если True, удаляет даже если user_id не совпадает (для админов/модераторов)
+        """
         message = self.get_by_id(message_id)
-        if message and message.user_id == user_id and not message.is_deleted:
+
+        # Проверяем права: либо автор, либо force=True (админ/модератор)
+        if message and not message.is_deleted and (message.user_id == user_id or force):
             message.is_deleted = True
+
+            # Удаляем связанные уведомления об упоминаниях в этом сообщении
+            from models.base import Notification
+            self.db.query(Notification).filter(
+                Notification.related_message_id == message_id,
+                Notification.type == 'mention'
+            ).delete(synchronize_session=False)
+
             self.db.commit()
             return message
         return None

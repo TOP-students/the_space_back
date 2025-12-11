@@ -376,6 +376,7 @@ const Modal = {
 
         // Массив для хранения добавленных участников
         const participantsList = [];
+        let selectedAvatarFile = null;
 
         modal.innerHTML = `
             <div class="modal-header">
@@ -402,6 +403,17 @@ const Modal = {
                                   rows="3"></textarea>
                     </div>
                     <div class="modal-form-group">
+                        <label for="room-avatar">Аватар комнаты (необязательно)</label>
+                        <div style="display: flex; align-items: center; gap: 12px;">
+                            <div id="avatar-preview" style="width: 60px; height: 60px; border-radius: 50%; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); display: flex; align-items: center; justify-content: center; color: white; font-size: 24px; font-weight: bold;">?</div>
+                            <div style="flex: 1;">
+                                <input type="file" id="room-avatar" accept="image/jpeg,image/png,image/webp,image/gif" style="display: none;"/>
+                                <button type="button" id="select-avatar-btn" class="modal-button modal-button-secondary" style="width: 100%;">Выбрать файл</button>
+                                <div id="avatar-filename" style="margin-top: 4px; font-size: 12px; color: #666;"></div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="modal-form-group">
                         <label>Добавить участников (необязательно)</label>
                         <div style="display: flex; gap: 8px; margin-bottom: 8px;">
                             <input type="text" id="participant-input" placeholder="Никнейм или ID пользователя" style="flex: 1;"/>
@@ -425,6 +437,46 @@ const Modal = {
         const addParticipantBtn = modal.querySelector('#add-participant-btn');
         const participantsListDiv = modal.querySelector('#participants-list');
         const participantError = modal.querySelector('#participant-error');
+
+        // Обработчики для загрузки аватара
+        const avatarInput = modal.querySelector('#room-avatar');
+        const selectAvatarBtn = modal.querySelector('#select-avatar-btn');
+        const avatarPreview = modal.querySelector('#avatar-preview');
+        const avatarFilename = modal.querySelector('#avatar-filename');
+
+        selectAvatarBtn.addEventListener('click', () => {
+            avatarInput.click();
+        });
+
+        avatarInput.addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            // Проверка типа файла
+            if (!file.type.startsWith('image/')) {
+                Modal.error('Выберите изображение');
+                return;
+            }
+
+            // Проверка размера (макс 10MB)
+            if (file.size > 10 * 1024 * 1024) {
+                Modal.error('Размер файла не должен превышать 10MB');
+                return;
+            }
+
+            selectedAvatarFile = file;
+            avatarFilename.textContent = file.name;
+
+            // Показываем превью
+            const reader = new FileReader();
+            reader.onload = (event) => {
+                avatarPreview.innerHTML = '';
+                avatarPreview.style.backgroundImage = `url(${event.target.result})`;
+                avatarPreview.style.backgroundSize = 'cover';
+                avatarPreview.style.backgroundPosition = 'center';
+            };
+            reader.readAsDataURL(file);
+        });
 
         // Добавление участника
         addParticipantBtn.addEventListener('click', async () => {
@@ -515,7 +567,8 @@ const Modal = {
             resolve({
                 name,
                 description,
-                participants: participantsList
+                participants: participantsList,
+                avatarFile: selectedAvatarFile
             });
         });
 

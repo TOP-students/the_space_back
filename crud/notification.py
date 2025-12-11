@@ -69,51 +69,111 @@ class MentionRepository:
     
     def parse_mentions(self, content: str) -> list[str]:
         """Парсить @упоминания из текста"""
-        # Ищем паттерн @nickname (буквы, цифры, подчёркивания)
-        pattern = r'@(\w+)'
+        # Ищем паттерн @nickname (любые символы кроме пробелов и @)
+        pattern = r'@([^\s@]+)'
         mentions = re.findall(pattern, content)
         return list(set(mentions))  # Уникальные
     
     def create_mentions(self, message_id: int, content: str, author_id: int, chat_id: int):
         """Создать упоминания и уведомления"""
         nicknames = self.parse_mentions(content)
-        
+
         if not nicknames:
             return []
-        
-        # Находим пользователей по никнеймам
-        users = self.db.query(User).filter(User.nickname.in_(nicknames)).all()
-        
-        mentioned_users = []
+
+        mentioned_user_ids = set()  # Используем set для отслеживания уникальных ID
         notification_repo = NotificationRepository(self.db)
-        
-        for user in users:
-            # Не упоминаем самого себя
-            if user.id == author_id:
-                continue
-            
-            # Создаём запись упоминания
-            mention = Mention(
-                message_id=message_id,
-                mentioned_user_id=user.id
-            )
-            self.db.add(mention)
-            
-            # Создаём уведомление
-            author = self.db.query(User).filter(User.id == author_id).first()
-            notification_repo.create(
-                user_id=user.id,
-                notification_type="mention",
-                title=f"{author.nickname} упомянул вас",
-                content=content[:100],  # Первые 100 символов
-                related_message_id=message_id,
-                related_user_id=author_id
-            )
-            
-            mentioned_users.append(user)
-        
+        author = self.db.query(User).filter(User.id == author_id).first()
+
+        # Проверяем наличие @all
+        if 'all' in nicknames:
+            # Получаем всех участников чата
+            from models.base import ChatParticipant
+            participants = self.db.query(ChatParticipant).filter(
+                ChatParticipant.chat_id == chat_id,
+                ChatParticipant.is_active == True
+            ).all()
+
+            for participant in participants:
+                # Не упоминаем самого себя
+                if participant.user_id == author_id:
+                    continue
+
+                # Пропускаем если уже упомянут
+                if participant.user_id in mentioned_user_ids:
+                    continue
+
+                mentioned_user_ids.add(participant.user_id)
+
+                # Проверяем, нет ли уже такого упоминания в БД
+                existing_mention = self.db.query(Mention).filter(
+                    Mention.message_id == message_id,
+                    Mention.mentioned_user_id == participant.user_id
+                ).first()
+
+                if not existing_mention:
+                    # Создаём запись упоминания
+                    mention = Mention(
+                        message_id=message_id,
+                        mentioned_user_id=participant.user_id
+                    )
+                    self.db.add(mention)
+
+                    # Создаём уведомление
+                    user = self.db.query(User).filter(User.id == participant.user_id).first()
+                    if user:
+                        notification_repo.create(
+                            user_id=user.id,
+                            notification_type="mention",
+                            title=f"{author.nickname} упомянул всех",
+                            content=content[:100],
+                            related_message_id=message_id,
+                            related_user_id=author_id
+                        )
+
+        # Обрабатываем конкретные упоминания (кроме @all)
+        specific_nicknames = [n for n in nicknames if n != 'all']
+        if specific_nicknames:
+            # Находим пользователей по никнеймам
+            users = self.db.query(User).filter(User.nickname.in_(specific_nicknames)).all()
+
+            for user in users:
+                # Не упоминаем самого себя
+                if user.id == author_id:
+                    continue
+
+                # Пропускаем если уже упомянут
+                if user.id in mentioned_user_ids:
+                    continue
+
+                mentioned_user_ids.add(user.id)
+
+                # Проверяем, нет ли уже такого упоминания в БД
+                existing_mention = self.db.query(Mention).filter(
+                    Mention.message_id == message_id,
+                    Mention.mentioned_user_id == user.id
+                ).first()
+
+                if not existing_mention:
+                    # Создаём запись упоминания
+                    mention = Mention(
+                        message_id=message_id,
+                        mentioned_user_id=user.id
+                    )
+                    self.db.add(mention)
+
+                    # Создаём уведомление
+                    notification_repo.create(
+                        user_id=user.id,
+                        notification_type="mention",
+                        title=f"{author.nickname} упомянул вас",
+                        content=content[:100],  # Первые 100 символов
+                        related_message_id=message_id,
+                        related_user_id=author_id
+                    )
+
         self.db.commit()
-        return mentioned_users
+        return list(mentioned_user_ids)
     
     def get_message_mentions(self, message_id: int):
         """Получить упоминания в сообщении"""

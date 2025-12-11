@@ -7,6 +7,7 @@ class SpaceCreate(BaseModel):
     name: str = Field(..., min_length=3, max_length=100)
     description: Optional[str] = Field(None, max_length=500)
     background_url: Optional[str] = None
+    avatar_url: Optional[str] = None
     
     @field_validator('name')
     @classmethod
@@ -34,6 +35,7 @@ class SpaceOut(BaseModel):
     description: Optional[str] = None
     admin_id: int
     chat_id: Optional[int] = None
+    avatar_url: Optional[str] = None
     
     class Config:
         from_attributes = True

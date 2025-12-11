@@ -1,0 +1,16 @@
+[build]
+  publish = "MIN"
+  command = "echo 'No build command needed'"
+
+# Перенаправление корневого пути на страницу входа
+[[redirects]]
+  from = "/"
+  to = "/login.html"
+  status = 200
+  force = true
+
+# Обработка всех остальных путей (для SPA роутинга)
+[[redirects]]
+  from = "/*"
+  to = "/:splat"
+  status = 200

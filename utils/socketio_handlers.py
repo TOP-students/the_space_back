@@ -254,6 +254,20 @@ def register_socketio_handlers(sio: socketio.AsyncServer):
                     type='text'
                 )
 
+                # Обрабатываем @-упоминания
+                try:
+                    from crud.notification import MentionRepository
+                    mention_repo = MentionRepository(db)
+                    mention_repo.create_mentions(
+                        message_id=new_message.id,
+                        content=message_content,
+                        author_id=int(user_id),
+                        chat_id=int(room_id)
+                    )
+                except Exception as mention_error:
+                    print(f"[Socket.IO] Failed to create mentions: {mention_error}")
+                    # Продолжаем отправку сообщения даже если упоминания не создались
+
                 # Получаем attachment если есть
                 attachment_data = None
                 if new_message.attachment:

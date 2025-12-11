@@ -39,6 +39,8 @@ class UserOut(BaseModel):
     status: str
     avatar_url: Optional[str] = None
     profile_background_url: Optional[str] = None
+    bio: Optional[str] = None
+    display_name: Optional[str] = None
 
 
 class Token(BaseModel):

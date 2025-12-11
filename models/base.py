@@ -74,6 +74,7 @@ class Chat(Base):
     user1_id = Column(BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     user2_id = Column(BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     space_id = Column(BigInteger, ForeignKey("spaces.id", ondelete="CASCADE"))
+    avatar_url = Column(String(500))
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 class Message(Base):
@@ -136,6 +137,7 @@ class Space(Base):
     description = Column(Text)
     admin_id = Column(BigInteger, ForeignKey("users.id"), nullable=False, index=True)
     background_url = Column(String(500))
+    avatar_url = Column(String(500))
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 class ChatParticipant(Base):

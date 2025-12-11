@@ -12,7 +12,8 @@ class Permission:
     BAN_MEMBERS = "ban_members"  # банить участников
     KICK_MEMBERS = "kick_members"  # удалять участников (без бана)
     RESTRICT_MEMBERS = "restrict_members"  # ограничивать права участников
-    PROMOTE_MEMBERS = "promote_members"  # назначать администраторов
+    PROMOTE_MEMBERS = "promote_members"  # назначать и создавать роли
+    UNTOUCHABLE = "untouchable"  # неприкасаемый (нельзя кикнуть/забанить/изменить роль, кроме владельца)
     
     # === сообщения ===
     SEND_MESSAGES = "send_messages"  # отправлять текстовые сообщения
@@ -34,7 +35,7 @@ class Permission:
     # все разрешения
     ALL = [
         CHANGE_INFO, DELETE_SPACE,
-        ADD_MEMBERS, BAN_MEMBERS, KICK_MEMBERS, RESTRICT_MEMBERS, PROMOTE_MEMBERS,
+        ADD_MEMBERS, BAN_MEMBERS, KICK_MEMBERS, RESTRICT_MEMBERS, PROMOTE_MEMBERS, UNTOUCHABLE,
         SEND_MESSAGES, SEND_MEDIA, SEND_STICKERS, SEND_FILES,
         EDIT_OWN_MESSAGES, DELETE_OWN_MESSAGES, DELETE_ANY_MESSAGES, PIN_MESSAGES,
         ADD_REACTIONS, MENTION_ALL, CREATE_INVITES
@@ -48,7 +49,7 @@ class Permission:
         },
         "member_management": {
             "name": "Управление участниками",
-            "permissions": [ADD_MEMBERS, BAN_MEMBERS, KICK_MEMBERS, RESTRICT_MEMBERS, PROMOTE_MEMBERS]
+            "permissions": [ADD_MEMBERS, BAN_MEMBERS, KICK_MEMBERS, RESTRICT_MEMBERS, PROMOTE_MEMBERS, UNTOUCHABLE]
         },
         "messaging": {
             "name": "Отправка сообщений",
@@ -199,8 +200,12 @@ def get_permission_info(permission: str) -> dict:
             "description": "Может ограничивать права других участников"
         },
         Permission.PROMOTE_MEMBERS: {
-            "name": "Назначать администраторов",
-            "description": "Может назначать других администраторов"
+            "name": "Назначать и создавать роли",
+            "description": "Может назначать роли другим участникам и создавать новые роли"
+        },
+        Permission.UNTOUCHABLE: {
+            "name": "Неприкасаемый",
+            "description": "Нельзя кикнуть, забанить или изменить роль (кроме владельца пространства)"
         },
         Permission.SEND_MESSAGES: {
             "name": "Отправлять сообщения",

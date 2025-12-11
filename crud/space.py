@@ -5,13 +5,14 @@ class SpaceRepository:
     def __init__(self, db: Session):
         self.db = db
 
-    def create(self, name: str, description: str, admin_id: int, background_url: str):
+    def create(self, name: str, description: str, admin_id: int, background_url: str, avatar_url: str = None):
         # space
         space = Space(
             name=name,
             description=description,
             admin_id=admin_id,
-            background_url=background_url
+            background_url=background_url,
+            avatar_url=avatar_url
         )
         self.db.add(space)
         self.db.commit()
@@ -116,7 +117,8 @@ class SpaceRepository:
             "name": space.name,
             "description": space.description,
             "admin_id": space.admin_id,
-            "chat_id": chat.id if chat else None
+            "chat_id": chat.id if chat else None,
+            "avatar_url": space.avatar_url
         }
 
     def join(self, space_id: int, user_id: int):

@@ -128,6 +128,30 @@ const API = {
         return this.post(`/spaces/${spaceId}/add-user?user_identifier=${encodeURIComponent(userIdentifier)}`);
     },
 
+    // Загрузить аватар пространства
+    async uploadSpaceAvatar(spaceId, file) {
+        const formData = new FormData();
+        formData.append('file', file);
+
+        const token = AuthService.getToken();
+        const url = `${CONFIG.API_BASE_URL}/spaces/${spaceId}/upload-avatar`;
+
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${token}`
+            },
+            body: formData
+        });
+
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.detail || 'Ошибка загрузки аватара');
+        }
+
+        return response.json();
+    },
+
     // Изменить название пространства
     async updateSpaceName(spaceId, newName) {
         return this.patch(`/spaces/${spaceId}/name?new_name=${encodeURIComponent(newName)}`);
@@ -153,6 +177,11 @@ const API = {
     // Получить сообщения чата
     async getMessages(chatId, limit = 50, offset = 0) {
         return this.get(`/messages/${chatId}?limit=${limit}&offset=${offset}`);
+    },
+
+    // Получить информацию о сообщении
+    async getMessageInfo(messageId) {
+        return this.get(`/messages/message/${messageId}`);
     },
 
     // Отправить сообщение
@@ -339,24 +368,34 @@ const API = {
 
     // === РОЛИ И ПРАВА ===
 
-    // Получить роли пространства
+    // Получить роли пространства с иерархией
     async getSpaceRoles(spaceId) {
         return this.get(`/spaces/${spaceId}/roles`);
     },
 
-    // Создать кастомную роль
+    // Создать роль
     async createRole(spaceId, roleData) {
         return this.post(`/spaces/${spaceId}/roles`, roleData);
     },
 
-    // Назначить роль пользователю
-    async assignRole(spaceId, userId, roleId) {
-        return this.post(`/spaces/${spaceId}/assign-role/${userId}/${roleId}`, {});
+    // Обновить роль
+    async updateRole(spaceId, roleId, roleData) {
+        return this.patch(`/spaces/${spaceId}/roles/${roleId}`, roleData);
     },
 
-    // Получить свои права в пространстве
-    async getMyPermissions(spaceId) {
-        return this.get(`/spaces/${spaceId}/my-permissions`);
+    // Удалить роль
+    async deleteRole(spaceId, roleId) {
+        return this.delete(`/spaces/${spaceId}/roles/${roleId}`);
+    },
+
+    // Назначить роль участнику
+    async assignRoleToMember(spaceId, userId, roleId) {
+        return this.post(`/spaces/${spaceId}/members/${userId}/role?role_id=${roleId}`, {});
+    },
+
+    // Получить участников с определённой ролью
+    async getRoleMembers(spaceId, roleId) {
+        return this.get(`/spaces/${spaceId}/roles/${roleId}/members`);
     },
 
     // Кикнуть пользователя
@@ -371,6 +410,72 @@ const API = {
 
     async unbanUser(spaceId, userId) {
         return this.delete(`/spaces/${spaceId}/unban/${userId}`);
+    },
+
+    // === СТАТУСЫ ПОЛЬЗОВАТЕЛЕЙ ===
+
+    // Получить свой статус
+    async getMyStatus() {
+        return this.get('/status/my-status');
+    },
+
+    // Установить статус (online, offline, away, dnd)
+    async setStatus(status) {
+        return this.post(`/status/set-status?status=${status}`, {});
+    },
+
+    // Получить статус пользователя
+    async getUserStatus(userId) {
+        return this.get(`/status/user/${userId}`);
+    },
+
+    // Получить список онлайн пользователей
+    async getOnlineUsers(spaceId = null) {
+        const url = spaceId ? `/status/online?space_id=${spaceId}` : '/status/online';
+        return this.get(url);
+    },
+
+    // Heartbeat для поддержания онлайн статуса
+    async heartbeat() {
+        return this.post('/status/heartbeat', {});
+    },
+
+    // === ДОСТУПНЫЕ РАЗРЕШЕНИЯ ===
+
+    // Получить список всех доступных разрешений
+    async getAvailablePermissions(spaceId) {
+        return this.get(`/spaces/${spaceId}/permissions`);
+    },
+
+    // Получить мои разрешения в пространстве
+    async getMyPermissions(spaceId) {
+        return this.get(`/spaces/${spaceId}/my-permissions`);
+    },
+
+    // === УВЕДОМЛЕНИЯ ===
+
+    // Получить список уведомлений
+    async getNotifications(unreadOnly = false, limit = 50) {
+        const params = new URLSearchParams();
+        if (unreadOnly) params.append('unread_only', 'true');
+        if (limit) params.append('limit', limit.toString());
+        const query = params.toString() ? `?${params.toString()}` : '';
+        return this.get(`/notifications/${query}`);
+    },
+
+    // Получить количество непрочитанных уведомлений
+    async getUnreadNotificationsCount() {
+        return this.get('/notifications/unread-count');
+    },
+
+    // Пометить уведомление как прочитанное
+    async markNotificationAsRead(notificationId) {
+        return this.post(`/notifications/${notificationId}/read`, {});
+    },
+
+    // Пометить все уведомления как прочитанные
+    async markAllNotificationsAsRead() {
+        return this.post('/notifications/mark-all-read', {});
     }
 };
 
