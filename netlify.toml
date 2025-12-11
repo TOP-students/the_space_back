@@ -1,9 +1,12 @@
 [build]
   publish = "MIN"
-  # Пустая команда сборки - это статический сайт
-  command = ""
-  # Игнорируем автоматическую установку зависимостей
-  ignore = "git diff --quiet HEAD^ HEAD ."
+  # Статический сайт - команда сборки не требуется
+  command = "echo 'Static site - no build needed'"
+
+# Отключаем автоматическую установку зависимостей
+[build.environment]
+  NODE_VERSION = "18"
+  PYTHON_VERSION = ""
 
 # Перенаправление корневого пути на страницу входа
 [[redirects]]
