@@ -2,6 +2,7 @@ from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 import socketio
+import os
 from models.base import Base, SessionLocal, engine
 from routers import auth, spaces, messages, profile, notifications, stickers, roles, status
 from crud.user import UserRepository
@@ -11,6 +12,27 @@ from crud.role import RoleRepository
 from crud.ban import BanRepository
 
 app = FastAPI()
+
+# CORS для продакшена
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:3000",  # локальная разработка
+        "https://your-frontend.onrender.com"  # фронтенд на Render
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# для проверки что сервер работает
+@app.get("/")
+async def root():
+    return {
+        "status": "online",
+        "message": "The Space API v1.0",
+        "docs": "/docs"
+    }
 
 # инициализация Socket.IO сервера
 sio = socketio.AsyncServer(
