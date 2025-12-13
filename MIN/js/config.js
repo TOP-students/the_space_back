@@ -34,9 +34,5 @@ async function login(username, password) {
   return data;
 }
 
-<<<<<<< HEAD
 // экспорт для использования в других модулях
-=======
-// Экспорт для использования в других модулях
->>>>>>> a496a93 (fix: ссылки бэкенда в config.js)
 window.CONFIG = CONFIG;
