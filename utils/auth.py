@@ -54,8 +54,19 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
 async def update_user_activity_middleware(user_id: int, db: Session):
     """Обновить активность при каждом запросе"""
     from crud.activity import ActivityRepository
+    from models.base import UserActivity
+    
     activity_repo = ActivityRepository(db)
-    activity_repo.update_activity(user_id, status="online")
+    
+    # Проверяем текущий статус пользователя
+    activity = db.query(UserActivity).filter(UserActivity.user_id == user_id).first()
+    
+    # Если статус установлен вручную (away, dnd, offline) - не меняем его, только обновляем last_seen
+    if activity and activity.status in ["away", "dnd", "offline"]:
+        activity_repo.update_last_seen(user_id)
+    else:
+        # Если статус online или нет записи - обновляем как обычно
+        activity_repo.update_activity(user_id, status="online")
 
 async def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)) -> User:
     """Получение текущего пользователя из JWT токена"""

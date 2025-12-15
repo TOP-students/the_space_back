@@ -30,6 +30,8 @@ async def set_status(
     db: Session = Depends(get_db)
 ):
     """Установить статус (online, offline, away, dnd)"""
+    from utils.socketio_instance import get_sio
+    
     valid_statuses = ["online", "offline", "away", "dnd"]
     if status not in valid_statuses:
         raise HTTPException(
@@ -39,6 +41,15 @@ async def set_status(
     
     activity_repo = ActivityRepository(db)
     activity_repo.set_status(current_user.id, status)
+    
+    # Broadcast статуса всем пользователям через WebSocket
+    sio = get_sio()
+    if sio:
+        await sio.emit('user_status_changed', {
+            'user_id': current_user.id,
+            'nickname': current_user.nickname,
+            'status': status
+        })
     
     return {"message": f"Статус изменён на {status}"}
 
@@ -86,8 +97,9 @@ async def heartbeat(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Heartbeat для поддержания онлайн статуса"""
+    """Heartbeat для обновления времени последней активности (без изменения статуса)"""
     activity_repo = ActivityRepository(db)
-    activity_repo.update_activity(current_user.id, status="online")
-    
+    # Используем update_last_seen вместо update_activity, чтобы не менять статус
+    activity_repo.update_last_seen(current_user.id)
+
     return {"message": "Activity updated"}

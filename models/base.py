@@ -100,6 +100,7 @@ class Attachment(Base):
     file_url = Column(String(500), nullable=False)
     file_type = Column(String(50))
     file_size = Column(BigInteger)
+    file_name = Column(String(255))
     uploaded_at = Column(DateTime(timezone=True), server_default=func.now())
 
 class Reaction(Base):

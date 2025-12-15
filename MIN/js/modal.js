@@ -595,6 +595,147 @@ const Modal = {
             }
         };
         document.addEventListener('keydown', escHandler);
+    },
+
+    // Модальное окно для настроек чата
+    chatSettings(currentData) {
+        return new Promise((resolve) => {
+            const overlay = document.createElement('div');
+            overlay.className = 'modal-overlay';
+
+            const modal = document.createElement('div');
+            modal.className = 'modal-window';
+
+            let selectedAvatarFile = null;
+            const isOwner = currentData.isOwner;
+
+            modal.innerHTML = `
+                <div class="modal-header">
+                    <h3 class="modal-title">${isOwner ? 'Настройки чата' : 'Изменить название'}</h3>
+                </div>
+                <div class="modal-body">
+                    <form id="chat-settings-form">
+                        <div class="modal-form-group">
+                            <label for="chat-name">Название</label>
+                            <input type="text"
+                                   id="chat-name"
+                                   required
+                                   placeholder="Введите название..."
+                                   value="${currentData.name}"
+                                   minlength="3"
+                                   maxlength="100"/>
+                        </div>
+                        ${isOwner ? `
+                            <div class="modal-form-group">
+                                <label for="chat-description">Описание</label>
+                                <textarea id="chat-description"
+                                          placeholder="Описание чата..."
+                                          maxlength="500"
+                                          rows="3">${currentData.description || ''}</textarea>
+                            </div>
+                            <div class="modal-form-group">
+                                <label for="chat-avatar">Аватар</label>
+                                <div style="display: flex; align-items: center; gap: 12px;">
+                                    <div id="avatar-preview" style="width: 60px; height: 60px; border-radius: 50%; ${currentData.avatarUrl ? `background-image: url('${currentData.avatarUrl}'); background-size: cover; background-position: center;` : 'background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);'} display: flex; align-items: center; justify-content: center; color: white; font-size: 24px; font-weight: bold;">${currentData.avatarUrl ? '' : currentData.name.charAt(0).toUpperCase()}</div>
+                                    <div style="flex: 1;">
+                                        <input type="file" id="chat-avatar" accept="image/jpeg,image/png,image/webp,image/gif" style="display: none;"/>
+                                        <button type="button" id="select-avatar-btn" class="modal-button modal-button-secondary" style="width: 100%;">Изменить аватар</button>
+                                        <div id="avatar-filename" style="margin-top: 4px; font-size: 12px; color: #666;"></div>
+                                    </div>
+                                </div>
+                            </div>
+                        ` : ''}
+                    </form>
+                </div>
+                <div class="modal-footer">
+                    <button class="modal-button modal-button-secondary" id="cancel-btn">Отмена</button>
+                    <button class="modal-button modal-button-primary" id="save-btn">Сохранить</button>
+                </div>
+            `;
+
+            overlay.appendChild(modal);
+            document.body.appendChild(overlay);
+
+            const chatNameInput = modal.querySelector('#chat-name');
+            const saveBtn = modal.querySelector('#save-btn');
+            const cancelBtn = modal.querySelector('#cancel-btn');
+
+            // Обработчики для аватара (только для владельца)
+            if (isOwner) {
+                const avatarInput = modal.querySelector('#chat-avatar');
+                const selectAvatarBtn = modal.querySelector('#select-avatar-btn');
+                const avatarPreview = modal.querySelector('#avatar-preview');
+                const avatarFilename = modal.querySelector('#avatar-filename');
+
+                selectAvatarBtn.addEventListener('click', () => {
+                    avatarInput.click();
+                });
+
+                avatarInput.addEventListener('change', (e) => {
+                    const file = e.target.files[0];
+                    if (!file) return;
+
+                    if (!file.type.startsWith('image/')) {
+                        Modal.error('Выберите изображение');
+                        return;
+                    }
+
+                    if (file.size > 10 * 1024 * 1024) {
+                        Modal.error('Размер файла не должен превышать 10MB');
+                        return;
+                    }
+
+                    selectedAvatarFile = file;
+                    avatarFilename.textContent = file.name;
+
+                    // Показываем превью
+                    const reader = new FileReader();
+                    reader.onload = (e) => {
+                        avatarPreview.style.backgroundImage = `url('${e.target.result}')`;
+                        avatarPreview.style.backgroundSize = 'cover';
+                        avatarPreview.style.backgroundPosition = 'center';
+                        avatarPreview.textContent = '';
+                    };
+                    reader.readAsDataURL(file);
+                });
+            }
+
+            saveBtn.addEventListener('click', () => {
+                const name = chatNameInput.value.trim();
+                if (!name) {
+                    Modal.error('Введите название');
+                    return;
+                }
+
+                const chatDescInput = modal.querySelector('#chat-description');
+                const description = isOwner && chatDescInput ? chatDescInput.value.trim() : currentData.description;
+
+                this._close(overlay);
+                resolve({
+                    name,
+                    description,
+                    avatarFile: selectedAvatarFile
+                });
+            });
+
+            cancelBtn.addEventListener('click', () => {
+                this._close(overlay);
+                resolve(null);
+            });
+
+            // ESC для закрытия
+            const escHandler = (e) => {
+                if (e.key === 'Escape') {
+                    this._close(overlay);
+                    resolve(null);
+                    document.removeEventListener('keydown', escHandler);
+                }
+            };
+            document.addEventListener('keydown', escHandler);
+
+            // Фокус на поле имени
+            setTimeout(() => chatNameInput.focus(), 100);
+        });
     }
 };
 

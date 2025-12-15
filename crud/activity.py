@@ -38,12 +38,46 @@ class ActivityRepository:
         self.db.refresh(activity)
         return activity
     
+    def update_last_seen(self, user_id: int):
+        """Обновить только время последней активности без изменения статуса"""
+        activity = self.db.query(UserActivity).filter(
+            UserActivity.user_id == user_id
+        ).first()
+
+        now = datetime.now()  # Без timezone
+
+        if activity:
+            activity.last_seen = now
+            # НЕ меняем статус, только обновляем время
+        else:
+            # Если записи активности нет - проверяем статус в User
+            user = self.db.query(User).filter(User.id == user_id).first()
+            initial_status = user.status if user and user.status else "online"
+
+            activity = UserActivity(
+                user_id=user_id,
+                last_seen=now,
+                status=initial_status,
+                is_active=(initial_status == "online")
+            )
+            self.db.add(activity)
+
+        self.db.commit()
+        self.db.refresh(activity)
+        return activity
+
     def set_status(self, user_id: int, status: str):
         """Установить статус пользователя"""
         valid_statuses = ["online", "offline", "away", "dnd"]
         if status not in valid_statuses:
             return None
-        
+
+        # Обновляем статус в таблице User для сохранения между сессиями
+        user = self.db.query(User).filter(User.id == user_id).first()
+        if user:
+            user.status = status
+            self.db.commit()
+
         return self.update_activity(user_id, status)
     
     def get_user_status(self, user_id: int) -> dict:
@@ -51,32 +85,36 @@ class ActivityRepository:
         activity = self.db.query(UserActivity).filter(
             UserActivity.user_id == user_id
         ).first()
-        
+
         if not activity:
+            # Если нет записи активности - берем статус из User
+            user = self.db.query(User).filter(User.id == user_id).first()
+            user_status = user.status if user and user.status else "offline"
             return {
-                "status": "offline",
+                "status": user_status,
                 "last_seen": None,
                 "is_active": False
             }
-        
-        # Автоматическое определение статуса по времени
+
+        # Проверяем время последней активности
         now = datetime.now()  # Без timezone
         time_since_active = (now - activity.last_seen).total_seconds() / 60
-        
-        if activity.status == "dnd":
-            # DND не меняется автоматически
-            status = "dnd"
+
+        # Если пользователь установил статус вручную (away, dnd, offline), сохраняем его
+        # Только для online автоматически меняем на offline при долгом отсутствии
+        if activity.status in ["away", "dnd", "offline"]:
+            # Статусы установленные вручную не меняются автоматически
+            status = activity.status
             is_active = False
         elif time_since_active < self.ONLINE_THRESHOLD_MINUTES:
+            # Если недавно был активен и статус online - остается online
             status = "online"
             is_active = True
-        elif time_since_active < self.AWAY_THRESHOLD_MINUTES:
-            status = "away"
-            is_active = False
         else:
+            # Если долго не было активности и статус был online - меняем на offline
             status = "offline"
             is_active = False
-        
+
         return {
             "status": status,
             "last_seen": activity.last_seen,

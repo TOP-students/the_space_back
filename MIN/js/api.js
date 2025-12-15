@@ -157,6 +157,14 @@ const API = {
         return this.patch(`/spaces/${spaceId}/name?new_name=${encodeURIComponent(newName)}`);
     },
 
+    // Обновить информацию о пространстве (название и описание)
+    async updateSpaceInfo(spaceId, data) {
+        const params = new URLSearchParams();
+        if (data.name) params.append('new_name', data.name);
+        if (data.description !== undefined) params.append('new_description', data.description);
+        return this.patch(`/spaces/${spaceId}/name?${params.toString()}`);
+    },
+
     // Удалить пользователя из пространства
     async kickUser(spaceId, userId) {
         return this.delete(`/spaces/${spaceId}/kick/${userId}`);
@@ -337,6 +345,21 @@ const API = {
         }
 
         return data;
+    },
+
+    // Обновить никнейм
+    async updateNickname(nickname) {
+        return this.patch(`/profile/update-nickname?nickname=${encodeURIComponent(nickname)}`);
+    },
+
+    // Обновить email
+    async updateEmail(email) {
+        return this.patch(`/profile/update-email?email=${encodeURIComponent(email)}`);
+    },
+
+    // Сменить пароль
+    async changePassword(oldPassword, newPassword) {
+        return this.post(`/profile/change-password?old_password=${encodeURIComponent(oldPassword)}&new_password=${encodeURIComponent(newPassword)}`);
     },
 
     // Загрузить баннер профиля

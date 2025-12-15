@@ -38,7 +38,8 @@ class MessageRepository:
             message_id=None,  # Временно
             file_url=file_info["url"],
             file_type=file_info.get("format"),
-            file_size=file_info.get("size")
+            file_size=file_info.get("size"),
+            file_name=file_info.get("filename")
         )
         self.db.add(attachment)
         self.db.flush()  # ID без коммита
@@ -66,17 +67,19 @@ class MessageRepository:
         return self.db.query(Message).filter(Message.id == message_id).first()
 
     def get_by_chat(self, chat_id: int, limit: int = 50, offset: int = 0):
+        # ОПТИМИЗАЦИЯ: Загружаем пользователя вместе с сообщением через joinedload
         messages = self.db.query(Message).options(
-            joinedload(Message.attachment)
-        ).join(User).filter(
+            joinedload(Message.attachment),
+            joinedload(Message.user)
+        ).filter(
             Message.chat_id == chat_id,
             Message.is_deleted == False
         ).order_by(Message.created_at.desc()).offset(offset).limit(limit).all()[::-1]
 
+        # Устанавливаем user_nickname из уже загруженного user
         for msg in messages:
-            user = self.db.query(User).filter(User.id == msg.user_id).first()
-            msg.user = user
-            msg.user_nickname = user.nickname if user else None
+            if msg.user:
+                msg.user_nickname = msg.user.nickname
 
         return messages
 

@@ -4,7 +4,7 @@
 function renderAttachment(attachment, messageType) {
     if (!attachment) return '';
 
-    const { file_url, file_type, file_size } = attachment;
+    const { file_url, file_type, file_size, file_name } = attachment;
 
     // Изображения
     if (messageType === 'image' || ['jpg', 'jpeg', 'png', 'gif', 'webp'].includes(file_type)) {
@@ -16,13 +16,13 @@ function renderAttachment(attachment, messageType) {
                      data-url="${file_url}"
                      title="Кликните для просмотра">
                 <div class="image-actions">
-                    <a href="${file_url}" download class="image-download-btn" title="Скачать" onclick="event.stopPropagation()">
+                    <button class="image-download-btn" title="Скачать" onclick="event.stopPropagation(); AttachmentUtils.downloadFile('${file_url}', '${file_name || 'image.jpg'}')">
                         <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                             <path d="M21 15V19C21 19.5304 20.7893 20.0391 20.4142 20.4142C20.0391 20.7893 19.5304 21 19 21H5C4.46957 21 3.96086 20.7893 3.58579 20.4142C3.21071 20.0391 3 19.5304 3 19V15" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
                             <path d="M7 10L12 15L17 10" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
                             <path d="M12 15V3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
                         </svg>
-                    </a>
+                    </button>
                     <button class="image-open-btn" title="Открыть в новой вкладке" onclick="event.stopPropagation(); window.open('${file_url}', '_blank')">
                         <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                             <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
@@ -43,13 +43,13 @@ function renderAttachment(attachment, messageType) {
                     <source src="${file_url}" type="audio/${file_type}">
                     Ваш браузер не поддерживает аудио.
                 </audio>
-                <a href="${file_url}" download class="audio-download-btn" title="Скачать">
+                <button class="audio-download-btn" title="Скачать" onclick="AttachmentUtils.downloadFile('${file_url}', '${file_name || 'audio.mp3'}')">
                     <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                         <path d="M21 15V19C21 19.5304 20.7893 20.0391 20.4142 20.4142C20.0391 20.7893 19.5304 21 19 21H5C4.46957 21 3.96086 20.7893 3.58579 20.4142C3.21071 20.0391 3 19.5304 3 19V15" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
                         <path d="M7 10L12 15L17 10" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
                         <path d="M12 15V3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
                     </svg>
-                </a>
+                </button>
             </div>
         `;
     }
@@ -57,6 +57,8 @@ function renderAttachment(attachment, messageType) {
     // Документы
     if (messageType === 'file' || ['pdf', 'doc', 'docx', 'txt'].includes(file_type)) {
         const sizeStr = file_size ? formatFileSize(file_size) : '';
+        const displayName = file_name || getFileNameFromUrl(file_url);
+        const downloadFileName = file_name || displayName || 'document';
         return `
             <div class="message-attachment message-document">
                 <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" class="document-icon">
@@ -64,16 +66,16 @@ function renderAttachment(attachment, messageType) {
                     <path d="M13 2V9H20" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
                 </svg>
                 <div class="document-info">
-                    <span class="document-name">${getFileNameFromUrl(file_url)}</span>
+                    <span class="document-name">${displayName}</span>
                     ${sizeStr ? `<span class="document-size">${sizeStr}</span>` : ''}
                 </div>
-                <a href="${file_url}" download target="_blank" class="document-download" title="Скачать">
+                <button class="document-download" title="Скачать" onclick="AttachmentUtils.downloadFile('${file_url}', '${downloadFileName}')">
                     <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                         <path d="M21 15V19C21 19.5304 20.7893 20.0391 20.4142 20.4142C20.0391 20.7893 19.5304 21 19 21H5C4.46957 21 3.96086 20.7893 3.58579 20.4142C3.21071 20.0391 3 19.5304 3 19V15" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
                         <path d="M7 10L12 15L17 10" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
                         <path d="M12 15V3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
                     </svg>
-                </a>
+                </button>
             </div>
         `;
     }
@@ -246,6 +248,25 @@ function validateFile(file) {
     return true;
 }
 
+// Скачать файл с правильным именем
+async function downloadFile(url, filename) {
+    try {
+        const response = await fetch(url);
+        const blob = await response.blob();
+        const link = document.createElement('a');
+        link.href = URL.createObjectURL(blob);
+        link.download = filename;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(link.href);
+    } catch (error) {
+        console.error('Error downloading file:', error);
+        // Fallback: открыть в новой вкладке
+        window.open(url, '_blank');
+    }
+}
+
 // Экспорт функций
 window.AttachmentUtils = {
     renderAttachment,
@@ -254,5 +275,6 @@ window.AttachmentUtils = {
     formatFileSize,
     getFileNameFromUrl,
     getFileType,
-    validateFile
+    validateFile,
+    downloadFile
 };

@@ -19,8 +19,43 @@ document.addEventListener('DOMContentLoaded', async function() {
         currentUserPermissions: [],
         chats: [], // Список чатов для проверки space_id
         heartbeatInterval: null, // Интервал для heartbeat
-        statusUpdateInterval: null // Интервал для обновления статусов
+        statusUpdateInterval: null, // Интервал для обновления статусов
+        // ОПТИМИЗАЦИЯ: Кеширование данных
+        cache: {
+            participants: null, // Кешированные участники текущего пространства
+            roles: null, // Кешированные роли текущего пространства
+            lastCacheSpaceId: null, // ID пространства для которого кеш актуален
+            cacheTimestamp: 0, // Время последнего обновления кеша
+            notifications: null, // Кешированные уведомления
+            notificationsTimestamp: 0 // Время последнего обновления уведомлений
+        },
+        messagesOffset: 0, // Смещение для пагинации сообщений
+        isLoadingMessages: false, // Флаг загрузки сообщений
+        virtualScroll: {
+            itemHeight: 80, // Примерная высота одного сообщения
+            visibleCount: 15, // Количество видимых сообщений
+            buffer: 5, // Буфер сверху и снизу
+            startIndex: 0, // Индекс первого видимого сообщения
+            endIndex: 0 // Индекс последнего видимого сообщения
+        },
+        virtualScrollUpdateTimeout: null // Таймер для обновления виртуализации
     };
+    
+    // Время жизни кеша в мс (30 секунд)
+    const CACHE_TTL = 30000;
+    
+    // Функция для инвалидации кеша
+    function invalidateCache() {
+        state.cache.participants = null;
+        state.cache.roles = null;
+        state.cache.cacheTimestamp = 0;
+    }
+
+    // Функция для инвалидации кеша уведомлений
+    function invalidateNotificationsCache() {
+        state.cache.notifications = null;
+        state.cache.notificationsTimestamp = 0;
+    }
 
     // DOM элементы
     const userNameElement = document.querySelector('.user-name');
@@ -52,27 +87,33 @@ document.addEventListener('DOMContentLoaded', async function() {
             // Получаем данные пользователя
             state.currentUser = await API.getCurrentUser();
 
-            // Устанавливаем статус "онлайн" при входе
-            try {
-                await API.setStatus('online');
-                state.currentUser.status = 'online';
-            } catch (error) {
-                console.error('Failed to set online status:', error);
-                // Не критично, продолжаем работу
+            // НЕ сбрасываем статус при входе - используем сохранённый статус пользователя
+            // Только если статус offline или не установлен - ставим online
+            const currentStatus = state.currentUser.status;
+            if (!currentStatus || currentStatus === 'offline') {
+                try {
+                    await API.setStatus('online');
+                    state.currentUser.status = 'online';
+                } catch (error) {
+                    console.error('Failed to set online status:', error);
+                }
             }
 
             updateUserProfile();
+
+            // Загружаем сохраненные настройки персонализации (синхронно, быстро)
+            loadPersonalizationSettings();
 
             // Инициализируем WebSocket (если доступен)
             if (typeof WebSocketClient !== 'undefined') {
                 initWebSocket();
             }
 
-            // Загружаем список пространств
-            await loadSpaces();
-
-            // Обновляем счётчик уведомлений
-            await updateNotificationBadge();
+            // ОПТИМИЗАЦИЯ: Загружаем spaces и notifications параллельно
+            await Promise.all([
+                loadSpaces(),
+                updateNotificationBadge()
+            ]);
 
             // Запускаем heartbeat для поддержания онлайн статуса
             startHeartbeat();
@@ -122,17 +163,20 @@ document.addEventListener('DOMContentLoaded', async function() {
             clearInterval(state.statusUpdateInterval);
         }
 
-        // Обновлять статусы каждые 30 секунд
+        // ОПТИМИЗАЦИЯ: Обновлять статусы реже (60 секунд) и только инвалидировать кеш
         state.statusUpdateInterval = setInterval(async () => {
-            // Обновляем только если открыта панель участников
-            if (document.getElementById('participants-list')) {
+            // Инвалидируем кеш чтобы следующий запрос получил свежие данные
+            invalidateCache();
+            
+            // Обновляем только если открыта правая панель с участниками
+            if (sidebarRight && sidebarRight.classList.contains('open')) {
                 try {
-                    await showParticipants(spaceId);
+                    await updateChatInfo();
                 } catch (error) {
                     console.error('Failed to update participant statuses:', error);
                 }
             }
-        }, 30 * 1000); // 30 секунд
+        }, 60 * 1000); // 60 секунд - реже обновляем
     }
 
     // Инициализация WebSocket
@@ -147,9 +191,17 @@ document.addEventListener('DOMContentLoaded', async function() {
             // Проверяем что мы в нужной комнате
             if (data.room_id == state.currentChatId || data.chat_id == state.currentChatId) {
 
+                // Проверяем, нет ли уже такого сообщения (защита от дублирования)
+                const messageId = data.id || Date.now();
+                const existingMessage = state.messages.find(m => m.id === messageId);
+                if (existingMessage) {
+                    console.log('Message already exists, skipping');
+                    return;
+                }
+
                 // Добавляем сообщение для всех (включая отправителя)
                 const message = {
-                    id: data.id || Date.now(),
+                    id: messageId,
                     user_id: parseInt(data.user_id),
                     content: data.message || data.content,
                     created_at: data.created_at || data.timestamp || new Date().toISOString(),
@@ -314,6 +366,47 @@ document.addEventListener('DOMContentLoaded', async function() {
                 updateChatInfo();
             }
         });
+
+        // Обработчик изменения статуса пользователя (real-time обновление)
+        state.wsClient.socket.on('user_status_changed', (data) => {
+            console.log('WS: User status changed', data);
+            
+            const statusConfig = {
+                'online': { color: '#43b581', text: 'В сети' },
+                'away': { color: '#faa61a', text: 'Отошёл' },
+                'dnd': { color: '#f04747', text: 'Не беспокоить' },
+                'offline': { color: '#747f8d', text: 'Не в сети' }
+            };
+            const statusInfo = statusConfig[data.status] || statusConfig['offline'];
+            
+            // Обновляем статус в кеше участников
+            if (state.cache.participants) {
+                const participant = state.cache.participants.find(p => p.id === data.user_id);
+                if (participant) {
+                    participant.status = data.status;
+                    participant.userStatus = data.status;
+                }
+            }
+            
+            // Обновляем индикатор статуса в правой панели
+            const memberItem = document.querySelector(`.chat-member-item[data-user-id="${data.user_id}"]`);
+            if (memberItem) {
+                const statusDot = memberItem.querySelector('.status-indicator');
+                if (statusDot) {
+                    statusDot.style.backgroundColor = statusInfo.color;
+                    statusDot.title = statusInfo.text;
+                }
+            }
+            
+            // Обновляем статус в модальном окне участников (если открыто)
+            const participantCard = document.querySelector(`.participant-card[data-user-id="${data.user_id}"]`);
+            if (participantCard) {
+                const statusDot = participantCard.querySelector('.participant-status-indicator');
+                if (statusDot) {
+                    statusDot.style.backgroundColor = statusInfo.color;
+                }
+            }
+        });
     }
 
     // Обновить профиль пользователя
@@ -328,17 +421,39 @@ document.addEventListener('DOMContentLoaded', async function() {
                 sidebarAvatar.style.objectFit = 'cover';
             }
 
+            // Добавляем обработчик мини-профиля для своего аватара
+            if (sidebarAvatar && !sidebarAvatar.dataset.miniProfileAttached) {
+                sidebarAvatar.dataset.miniProfileAttached = 'true';
+                sidebarAvatar.style.cursor = 'pointer';
+
+                sidebarAvatar.addEventListener('mouseenter', async (e) => {
+                    try {
+                        MiniProfile.show(state.currentUser, e);
+                    } catch (error) {
+                        console.error('Error showing own mini-profile:', error);
+                    }
+                });
+
+                sidebarAvatar.addEventListener('mouseleave', () => {
+                    MiniProfile.hide();
+                });
+            }
+
             // Обновляем индикатор статуса в сайдбаре
             const sidebarStatusIndicator = document.getElementById('sidebar-status-indicator');
+            const sidebarStatusText = document.getElementById('sidebar-status-text');
             if (sidebarStatusIndicator) {
                 const statusConfig = {
-                    'online': '#43b581',
-                    'away': '#faa61a',
-                    'dnd': '#f04747',
-                    'offline': '#747f8d'
+                    'online': { color: '#43b581', text: 'В сети' },
+                    'away': { color: '#faa61a', text: 'Отошёл' },
+                    'dnd': { color: '#f04747', text: 'Не беспокоить' },
+                    'offline': { color: '#747f8d', text: 'Не в сети' }
                 };
-                const statusColor = statusConfig[state.currentUser.status] || statusConfig['online'];
-                sidebarStatusIndicator.style.backgroundColor = statusColor;
+                const status = statusConfig[state.currentUser.status] || statusConfig['online'];
+                sidebarStatusIndicator.style.backgroundColor = status.color;
+                if (sidebarStatusText) {
+                    sidebarStatusText.textContent = status.text;
+                }
             }
         }
     }
@@ -413,17 +528,10 @@ document.addEventListener('DOMContentLoaded', async function() {
             li.innerHTML = `
                 <div class="chat-icon" style="${iconStyle}">${iconContent}</div>
                 <span class="space-name">${space.name}</span>
-                <button class="space-settings-btn" title="Настройки пространства">⚙️</button>
             `;
 
             // Клик по названию пространства
             li.querySelector('.space-name').addEventListener('click', () => selectSpace(space));
-
-            // Клик по иконке настроек (доступна всем участникам)
-            li.querySelector('.space-settings-btn').addEventListener('click', (e) => {
-                e.stopPropagation();
-                openSpaceSettings(space);
-            });
 
             chatListElement.appendChild(li);
         });
@@ -444,6 +552,12 @@ document.addEventListener('DOMContentLoaded', async function() {
             state.wsClient.leaveRoom(state.currentChatId, state.currentUser.id);
         }
 
+        // Удаляем обработчик скролла со старого контейнера
+        const oldContainer = document.getElementById('messages-container');
+        if (oldContainer) {
+            oldContainer.removeEventListener('scroll', handleMessagesScroll);
+        }
+
         // Обновляем активный элемент
         document.querySelectorAll('.chat-item').forEach(item => {
             item.classList.remove('active');
@@ -458,32 +572,61 @@ document.addEventListener('DOMContentLoaded', async function() {
 
         // Сбрасываем список участников для автодополнения
         mentionAutocompleteParticipants = [];
+        
+        // ОПТИМИЗАЦИЯ: Сбрасываем кеш при смене пространства
+        state.cache.participants = null;
+        state.cache.roles = null;
+        state.cache.lastCacheSpaceId = null;
+        state.cache.cacheTimestamp = 0;
+        
+        // Сбрасываем offset для пагинации сообщений
+        state.messagesOffset = 0;
+        state.messages = []; // Очищаем сообщения при смене чата
 
-        // Пробуем присоединиться к пространству через API
+        // ОПТИМИЗАЦИЯ: Делаем все запросы параллельно
         try {
-            await API.joinSpace(space.id);
-        } catch (error) {
-            console.error('Error joining space:', error);
+            // Запускаем joinSpace и getMyPermissions параллельно
+            const [joinResult, permissionsResult] = await Promise.all([
+                API.joinSpace(space.id).catch(error => {
+                    // Обрабатываем ошибки join отдельно
+                    if (error.message.includes('забанены') || error.message.includes('banned')) {
+                        throw new Error('BANNED');
+                    } else if (error.message.includes('404')) {
+                        throw new Error('NOT_FOUND');
+                    }
+                    return null; // Игнорируем остальные ошибки (уже в пространстве)
+                }),
+                API.getMyPermissions(space.id).catch(() => ({ permissions: [] }))
+            ]);
 
-            // Обрабатываем конкретные ошибки
-            if (error.message.includes('забанены') || error.message.includes('banned')) {
+            // Проверяем критические ошибки
+            if (joinResult === 'BANNED') {
                 await Modal.error('Вы забанены в этом пространстве');
-                return; // Прерываем выполнение
-            } else if (error.message.includes('404')) {
+                return;
+            }
+            if (joinResult === 'NOT_FOUND') {
                 await Modal.error('Пространство не найдено');
                 return;
             }
-            // Игнорируем остальные ошибки (например, если уже в пространстве)
-        }
 
-        // Получаем права пользователя в этом пространстве
-        try {
-            const permissions = await API.getMyPermissions(space.id);
-            state.currentUserPermissions = permissions.permissions || [];
-            console.log('User permissions in space:', state.currentUserPermissions);
+            // Устанавливаем permissions
+            state.currentUserPermissions = permissionsResult.permissions || [];
+
+            // ОПТИМИЗАЦИЯ: Загружаем только последние 30 сообщений для быстрой загрузки
+            await loadMessages(30, 0, false);
+
         } catch (error) {
-            console.error('Error loading permissions:', error);
-            state.currentUserPermissions = [];
+            if (error.message === 'BANNED') {
+                await Modal.error('Вы забанены в этом пространстве');
+                return;
+            }
+            if (error.message === 'NOT_FOUND') {
+                await Modal.error('Пространство не найдено');
+                return;
+            }
+            console.error('Error selecting space:', error);
+            // Продолжаем с тем, что есть
+            renderChat();
         }
 
         // Присоединяемся к комнате через WebSocket
@@ -491,23 +634,86 @@ document.addEventListener('DOMContentLoaded', async function() {
             state.wsClient.joinRoom(space.chat_id, state.currentUser.id, state.currentUser.nickname);
         }
 
-        // Загружаем сообщения
-        await loadMessages();
-
-        // Обновляем правую панель с информацией о чате
-        await updateChatInfo();
+        // Обновляем правую панель с информацией о чате (не блокируем основной UI)
+        updateChatInfo();
     }
 
     // Загрузить сообщения
-    async function loadMessages() {
-        if (!state.currentChatId) return;
+    async function loadMessages(limit = 30, offset = 0, append = false) {
+        if (!state.currentChatId || state.isLoadingMessages) return;
 
+        state.isLoadingMessages = true;
         try {
-            state.messages = await API.getMessages(state.currentChatId);
+            const newMessages = await API.getMessages(state.currentChatId, limit, offset);
+            
+            if (append) {
+                // Добавляем старые сообщения в начало
+                state.messages = [...newMessages, ...state.messages];
+                state.messagesOffset += newMessages.length;
+            } else {
+                // Заменяем все сообщения
+                state.messages = newMessages;
+                state.messagesOffset = newMessages.length;
+            }
+            
+            // Если загрузили меньше чем limit - значит больше нет сообщений
+            if (newMessages.length < limit) {
+                state.messagesOffset = -1; // Флаг что больше нет сообщений
+            }
+            
             renderChat();
+            
+            // Если загружали старые сообщения - сохраняем позицию скролла
+            if (append && newMessages.length > 0) {
+                const container = document.getElementById('messages-container');
+                if (container) {
+                    const oldScrollHeight = container.scrollHeight;
+                    // Небольшая задержка для рендеринга
+                    setTimeout(() => {
+                        const newScrollHeight = container.scrollHeight;
+                        container.scrollTop = newScrollHeight - oldScrollHeight;
+                    }, 10);
+                }
+            }
         } catch (error) {
             console.error('Error loading messages:', error);
-            renderChat(); // Рендерим пустой чат с формой
+            if (!append) {
+                renderChat(); // Рендерим пустой чат с формой только при первой загрузке
+            }
+        } finally {
+            state.isLoadingMessages = false;
+        }
+    }
+
+    // Обработчик скролла для lazy loading старых сообщений и виртуализации
+    function handleMessagesScroll(event) {
+        const container = event.target;
+        if (!container) return;
+
+        // Lazy loading старых сообщений
+        if (container.scrollTop < 200 && !state.isLoadingMessages && 
+            state.messages.length > 0 && state.messagesOffset !== -1) {
+            loadMessages(30, state.messagesOffset, true);
+        }
+
+        // ОПТИМИЗАЦИЯ: Обновляем виртуализацию при скролле (только если сообщений много)
+        if (state.messages.length > 50) {
+            // Дебаунсим обновление виртуализации для производительности
+            clearTimeout(state.virtualScrollUpdateTimeout);
+            state.virtualScrollUpdateTimeout = setTimeout(() => {
+                const container = document.getElementById('messages-container');
+                if (container) {
+                    const oldHTML = container.innerHTML;
+                    const newHTML = renderMessages();
+                    if (oldHTML !== newHTML) {
+                        const scrollTop = container.scrollTop;
+                        const scrollHeight = container.scrollHeight;
+                        container.innerHTML = newHTML;
+                        // Восстанавливаем позицию скролла
+                        container.scrollTop = scrollTop;
+                    }
+                }
+            }, 50); // Обновляем не чаще чем раз в 50мс
         }
     }
 
@@ -545,6 +751,9 @@ document.addEventListener('DOMContentLoaded', async function() {
                         <p class="chat-description" style="margin: 0;">${state.currentSpace.description || ''}</p>
                     </div>
                 </div>
+                <button class="chat-settings-btn" title="Настройки пространства">
+                    ⋮
+                </button>
             </div>
             <div class="messages-container" id="messages-container">
                 ${renderMessages()}
@@ -618,6 +827,26 @@ document.addEventListener('DOMContentLoaded', async function() {
         // Добавляем обработчики для реакций
         attachReactionHandlers(container);
 
+        // ОПТИМИЗАЦИЯ: Lazy loading старых сообщений и виртуализация при скролле
+        if (container) {
+            // Удаляем старый обработчик если есть
+            container.removeEventListener('scroll', handleMessagesScroll);
+            // Добавляем новый обработчик с throttling для производительности
+            let scrollTimeout;
+            container.addEventListener('scroll', (e) => {
+                clearTimeout(scrollTimeout);
+                scrollTimeout = setTimeout(() => handleMessagesScroll(e), 16); // ~60fps
+            });
+        }
+
+        // Обработчик кнопки настроек в шапке чата
+        const chatSettingsBtn = document.querySelector('.chat-settings-btn');
+        if (chatSettingsBtn) {
+            chatSettingsBtn.addEventListener('click', () => {
+                openSpaceSettings(state.currentSpace);
+            });
+        }
+
         // Скроллим вниз
         scrollToBottom();
     }
@@ -641,24 +870,39 @@ document.addEventListener('DOMContentLoaded', async function() {
         }
 
         try {
-            // Загружаем участников и роли параллельно
-            const [participantsData, rolesData] = await Promise.all([
-                API.getSpaceParticipants(state.currentSpace.id),
-                API.getSpaceRoles(state.currentSpace.id).catch(() => [])
-            ]);
+            const spaceId = state.currentSpace.id;
+            const now = Date.now();
+            
+            let participants, roles;
+            
+            // ОПТИМИЗАЦИЯ: Используем кеш если он актуален
+            const cacheValid = state.cache.lastCacheSpaceId === spaceId && 
+                              (now - state.cache.cacheTimestamp) < CACHE_TTL &&
+                              state.cache.participants && state.cache.roles;
+            
+            if (cacheValid) {
+                participants = state.cache.participants;
+                roles = state.cache.roles;
+            } else {
+                // Загружаем участников и роли параллельно
+                const [participantsData, rolesData] = await Promise.all([
+                    API.getSpaceParticipants(spaceId),
+                    API.getSpaceRoles(spaceId).catch(() => [])
+                ]);
 
-            const participants = participantsData.participants || [];
-            const roles = rolesData || [];
+                participants = participantsData.participants || [];
+                roles = rolesData || [];
+                
+                // Обновляем кеш
+                state.cache.participants = participants;
+                state.cache.roles = roles;
+                state.cache.lastCacheSpaceId = spaceId;
+                state.cache.cacheTimestamp = now;
+            }
 
-            // Загружаем статусы участников
-            const statusPromises = participants.map(p =>
-                API.getUserStatus(p.id).catch(err => ({ status: 'offline' }))
-            );
-            const statuses = await Promise.all(statusPromises);
-
-            // Добавляем статусы к участникам
-            participants.forEach((p, i) => {
-                p.userStatus = statuses[i].status || 'offline';
+            // ОПТИМИЗАЦИЯ: Статус уже есть в ответе get_participants, не делаем лишние запросы
+            participants.forEach(p => {
+                p.userStatus = p.status || 'offline';
             });
 
             // Группируем участников по ролям
@@ -679,8 +923,8 @@ document.addEventListener('DOMContentLoaded', async function() {
             const noRoleGroup = {
                 role: {
                     id: 'no-role',
-                    name: 'Участники',
-                    color: '#808080',
+                    name: 'Без роли',
+                    color: '#f0f0f0',
                     priority: 0
                 },
                 members: []
@@ -768,7 +1012,7 @@ document.addEventListener('DOMContentLoaded', async function() {
 
             // Отрисовываем
             sidebarRightContent.innerHTML = `
-                <div class="chat-info-header" style="background: ${gradient}">
+                <div class="chat-info-header participants-header">
                     <div style="display: flex; flex-direction: column; align-items: center; padding: 20px;">
                         <div class="chat-icon" style="${spaceIconStyle}; width: 80px; height: 80px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 32px; font-weight: bold; color: white; margin-bottom: 12px;">${spaceIconContent}</div>
                         <h3 class="chat-info-title" style="margin: 0;">${state.currentSpace.name}</h3>
@@ -841,6 +1085,30 @@ document.addEventListener('DOMContentLoaded', async function() {
                         const nickname = item.querySelector('.chat-member-name').textContent.trim();
                         showMemberContextMenu(e, { id: userId, nickname: nickname }, state.currentSpace.id);
                     });
+
+                    // Наведение мыши - показать мини-профиль
+                    const avatar = item.querySelector('.chat-member-avatar');
+                    if (avatar) {
+                        avatar.addEventListener('mouseenter', async (e) => {
+                            const userId = parseInt(item.dataset.userId);
+                            try {
+                                let userData;
+                                // Если это свой профиль - используем state.currentUser с актуальным статусом
+                                if (userId === state.currentUser.id) {
+                                    userData = state.currentUser;
+                                } else {
+                                    userData = await API.getUserProfile(userId);
+                                }
+                                MiniProfile.show(userData, e);
+                            } catch (error) {
+                                console.error('Error loading user data for mini-profile:', error);
+                            }
+                        });
+
+                        avatar.addEventListener('mouseleave', () => {
+                            MiniProfile.hide();
+                        });
+                    }
                 });
             }, 0);
         } catch (error) {
@@ -853,83 +1121,120 @@ document.addEventListener('DOMContentLoaded', async function() {
         }
     }
 
-    // Отрисовать сообщения
+    // ОПТИМИЗАЦИЯ: Виртуализация - рендерим только видимые сообщения
+    function getVisibleMessages() {
+        const container = document.getElementById('messages-container');
+        if (!container || state.messages.length === 0) {
+            return { start: 0, end: state.messages.length, messages: state.messages };
+        }
+
+        const containerHeight = container.clientHeight;
+        const scrollTop = container.scrollTop;
+        const itemHeight = 100; // Примерная высота сообщения
+        const buffer = 5; // Буфер сверху и снизу
+
+        const startIndex = Math.max(0, Math.floor(scrollTop / itemHeight) - buffer);
+        const visibleCount = Math.ceil(containerHeight / itemHeight) + buffer * 2;
+        const endIndex = Math.min(state.messages.length, startIndex + visibleCount);
+
+        return {
+            start: startIndex,
+            end: endIndex,
+            messages: state.messages.slice(startIndex, endIndex)
+        };
+    }
+
+    // Отрисовать сообщения (с виртуализацией)
     function renderMessages() {
         if (state.messages.length === 0) {
             return '<div class="no-messages">Сообщений пока нет. Начните общение!</div>';
         }
 
-        return state.messages.map(msg => {
-            const isOwn = msg.user_id === state.currentUser.id;
-            const time = new Date(msg.created_at).toLocaleTimeString('ru-RU', {
-                hour: '2-digit',
-                minute: '2-digit'
-            });
+        // Для небольшого количества сообщений рендерим все
+        if (state.messages.length <= 50) {
+            return state.messages.map(msg => renderSingleMessage(msg)).join('');
+        }
 
-            // Используем user_nickname если есть, иначе fallback на User#id
-            const authorName = isOwn ? 'Вы' : (msg.user_nickname || 'User#' + msg.user_id);
+        // Для большого количества используем виртуализацию
+        const visible = getVisibleMessages();
+        const topSpacer = visible.start > 0 ? `<div style="height: ${visible.start * 100}px;"></div>` : '';
+        const bottomSpacer = visible.end < state.messages.length 
+            ? `<div style="height: ${(state.messages.length - visible.end) * 100}px;"></div>` : '';
 
-            // Генерируем аватарку с первой буквой и градиентом
-            const avatarLetter = isOwn
-                ? (state.currentUser?.nickname ? state.currentUser.nickname.charAt(0).toUpperCase() : 'Я')
-                : (msg.user_nickname ? msg.user_nickname.charAt(0).toUpperCase() : 'U');
-            const avatarGradient = generateGradientFromId(msg.user_id);
+        return topSpacer + visible.messages.map(msg => renderSingleMessage(msg)).join('') + bottomSpacer;
+    }
 
-            // Проверяем, есть ли реальный аватар
-            const avatarUrl = isOwn ? state.currentUser?.avatar_url : (msg.user_avatar_url || msg.user?.avatar_url);
-            const avatarContent = avatarUrl
-                ? `<img src="${avatarUrl}" alt="${authorName}" style="width: 100%; height: 100%; object-fit: cover; border-radius: 50%;">`
-                : avatarLetter;
-            const avatarStyle = avatarUrl ? '' : `background: ${avatarGradient};`;
+    // Рендер одного сообщения (вынесено для переиспользования)
+    function renderSingleMessage(msg) {
+        const isOwn = msg.user_id === state.currentUser.id;
+        const time = new Date(msg.created_at).toLocaleTimeString('ru-RU', {
+            hour: '2-digit',
+            minute: '2-digit'
+        });
 
-            // Проверка прав на удаление
-            const currentChat = state.chats.find(c => c.id === state.currentChatId);
-            const canDeleteAny = currentChat?.space_id && state.currentUserPermissions?.includes('delete_any_messages');
-            const canDelete = isOwn || canDeleteAny;
+        // Используем user_nickname если есть, иначе fallback на User#id
+        const authorName = isOwn ? 'Вы' : (msg.user_nickname || 'User#' + msg.user_id);
 
-            // Кнопки редактирования и удаления
-            let messageActions = '';
-            if (canDelete) {
-                messageActions = `
-                    <div class="message-actions">
-                        ${isOwn ? `
-                            <button class="message-action-btn edit-btn" data-message-id="${msg.id}" title="Редактировать">
-                                <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                                    <path d="M11 4H4C3.46957 4 2.96086 4.21071 2.58579 4.58579C2.21071 4.96086 2 5.46957 2 6V20C2 20.5304 2.21071 21.0391 2.58579 21.4142C2.96086 21.7893 3.46957 22 4 22H18C18.5304 22 19.0391 21.7893 19.4142 21.4142C19.7893 21.0391 20 20.5304 20 20V13" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                                    <path d="M18.5 2.50023C18.8978 2.1024 19.4374 1.87891 20 1.87891C20.5626 1.87891 21.1022 2.1024 21.5 2.50023C21.8978 2.89805 22.1213 3.43762 22.1213 4.00023C22.1213 4.56284 21.8978 5.1024 21.5 5.50023L12 15.0002L8 16.0002L9 12.0002L18.5 2.50023Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                                </svg>
-                            </button>
-                        ` : ''}
-                        <button class="message-action-btn delete-btn" data-message-id="${msg.id}" title="Удалить">
+        // Генерируем аватарку с первой буквой и градиентом
+        const avatarLetter = isOwn
+            ? (state.currentUser?.nickname ? state.currentUser.nickname.charAt(0).toUpperCase() : 'Я')
+            : (msg.user_nickname ? msg.user_nickname.charAt(0).toUpperCase() : 'U');
+        const avatarGradient = generateGradientFromId(msg.user_id);
+
+        // Проверяем, есть ли реальный аватар
+        const avatarUrl = isOwn ? state.currentUser?.avatar_url : (msg.user_avatar_url || msg.user?.avatar_url);
+        const avatarContent = avatarUrl
+            ? `<img src="${avatarUrl}" alt="${authorName}" style="width: 100%; height: 100%; object-fit: cover; border-radius: 50%;">`
+            : avatarLetter;
+        const avatarStyle = avatarUrl ? '' : `background: ${avatarGradient};`;
+
+        // Проверка прав на удаление
+        const currentChat = state.chats.find(c => c.id === state.currentChatId);
+        const canDeleteAny = currentChat?.space_id && state.currentUserPermissions?.includes('delete_any_messages');
+        const canDelete = isOwn || canDeleteAny;
+
+        // Кнопки редактирования и удаления
+        let messageActions = '';
+        if (canDelete) {
+            messageActions = `
+                <div class="message-actions">
+                    ${isOwn ? `
+                        <button class="message-action-btn edit-btn" data-message-id="${msg.id}" title="Редактировать">
                             <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                                <path d="M3 6H5H21" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                                <path d="M8 6V4C8 3.46957 8.21071 2.96086 8.58579 2.58579C8.96086 2.21071 9.46957 2 10 2H14C14.5304 2 15.0391 2.21071 15.4142 2.58579C15.7893 2.96086 16 3.46957 16 4V6M19 6V20C19 20.5304 18.7893 21.0391 18.4142 21.4142C18.0391 21.7893 17.5304 22 17 22H7C6.46957 22 5.96086 21.7893 5.58579 21.4142C5.21071 21.0391 5 20.5304 5 20V6H19Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                                <path d="M11 4H4C3.46957 4 2.96086 4.21071 2.58579 4.58579C2.21071 4.96086 2 5.46957 2 6V20C2 20.5304 2.21071 21.0391 2.58579 21.4142C2.96086 21.7893 3.46957 22 4 22H18C18.5304 22 19.0391 21.7893 19.4142 21.4142C19.7893 21.0391 20 20.5304 20 20V13" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                                <path d="M18.5 2.50023C18.8978 2.1024 19.4374 1.87891 20 1.87891C20.5626 1.87891 21.1022 2.1024 21.5 2.50023C21.8978 2.89805 22.1213 3.43762 22.1213 4.00023C22.1213 4.56284 21.8978 5.1024 21.5 5.50023L12 15.0002L8 16.0002L9 12.0002L18.5 2.50023Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
                             </svg>
                         </button>
-                    </div>
-                `;
-            }
-
-            // Рендер вложения если есть
-            const attachmentHTML = msg.attachment ? AttachmentUtils.renderAttachment(msg.attachment, msg.type) : '';
-
-            // Рендер реакций если есть
-            const reactionsHTML = AttachmentUtils.renderReactions(msg.reactions || [], msg.my_reaction, msg.id);
-
-            return `
-                <div class="message ${isOwn ? 'own-message' : 'other-message'}" data-message-id="${msg.id}">
-                    <div class="message-avatar" data-user-id="${msg.user_id}" style="${avatarStyle} cursor: pointer;" title="Открыть профиль">${avatarContent}</div>
-                    <div class="message-body">
-                        <div class="message-author">${authorName}</div>
-                        <div class="message-content" data-original-content="${escapeHtml(msg.content)}">${processMentions(msg.content)}</div>
-                        ${attachmentHTML}
-                        ${reactionsHTML}
-                        <div class="message-time">${time}</div>
-                        ${messageActions}
-                    </div>
+                    ` : ''}
+                    <button class="message-action-btn delete-btn" data-message-id="${msg.id}" title="Удалить">
+                        <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                            <path d="M3 6H5H21" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                            <path d="M8 6V4C8 3.46957 8.21071 2.96086 8.58579 2.58579C8.96086 2.21071 9.46957 2 10 2H14C14.5304 2 15.0391 2.21071 15.4142 2.58579C15.7893 2.96086 16 3.46957 16 4V6M19 6V20C19 20.5304 18.7893 21.0391 18.4142 21.4142C18.0391 21.7893 17.5304 22 17 22H7C6.46957 22 5.96086 21.7893 5.58579 21.4142C5.21071 21.0391 5 20.5304 5 20V6H19Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                    </button>
                 </div>
             `;
-        }).join('');
+        }
+
+        // Рендер вложения если есть
+        const attachmentHTML = msg.attachment ? AttachmentUtils.renderAttachment(msg.attachment, msg.type) : '';
+
+        // Рендер реакций если есть
+        const reactionsHTML = AttachmentUtils.renderReactions(msg.reactions || [], msg.my_reaction, msg.id);
+
+        return `
+            <div class="message ${isOwn ? 'own-message' : 'other-message'}" data-message-id="${msg.id}">
+                <div class="message-avatar" data-user-id="${msg.user_id}" style="${avatarStyle} cursor: pointer;" title="Открыть профиль">${avatarContent}</div>
+                <div class="message-body">
+                    <div class="message-author">${authorName}</div>
+                    <div class="message-content" data-original-content="${escapeHtml(msg.content)}">${processMentions(msg.content)}</div>
+                    ${attachmentHTML}
+                    ${reactionsHTML}
+                    <div class="message-time">${time}</div>
+                    ${messageActions}
+                </div>
+            </div>
+        `;
     }
 
     // Отправить сообщение
@@ -967,8 +1272,11 @@ document.addEventListener('DOMContentLoaded', async function() {
             try {
                 const newMessage = await API.sendMessage(state.currentChatId, content);
 
-                // Добавляем сообщение в список
-                state.messages.push(newMessage);
+                // Проверяем, нет ли уже такого сообщения (защита от дублирования)
+                const existingMessage = state.messages.find(m => m.id === newMessage.id);
+                if (!existingMessage) {
+                    state.messages.push(newMessage);
+                }
 
                 // Перерисовываем чат
                 renderChat();
@@ -1002,6 +1310,12 @@ document.addEventListener('DOMContentLoaded', async function() {
         // Добавляем только новое сообщение
         const lastMessage = state.messages[state.messages.length - 1];
         if (!lastMessage) return;
+
+        // Проверяем, не добавлено ли уже это сообщение в DOM
+        const existingMessageElement = container.querySelector(`[data-message-id="${lastMessage.id}"]`);
+        if (existingMessageElement) {
+            return; // Сообщение уже отображено
+        }
 
         const isOwn = lastMessage.user_id === state.currentUser.id;
         const time = new Date(lastMessage.created_at).toLocaleTimeString('ru-RU', {
@@ -1075,6 +1389,12 @@ document.addEventListener('DOMContentLoaded', async function() {
         // Добавляем обработчики для кнопок
         attachMessageActionHandlers(messageDiv);
 
+        // Скроллим вниз только если пользователь уже был внизу (не при lazy loading)
+        const isNearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 100;
+        if (isNearBottom) {
+            scrollToBottom();
+        }
+
         // Добавляем обработчики для реакций и изображений
         attachReactionHandlers(messageDiv);
 
@@ -1092,6 +1412,27 @@ document.addEventListener('DOMContentLoaded', async function() {
                 e.stopPropagation();
                 const userId = parseInt(avatar.dataset.userId);
                 openProfileModal(userId);
+            });
+
+            // Мини-профиль при наведении
+            avatar.addEventListener('mouseenter', async (e) => {
+                const userId = parseInt(avatar.dataset.userId);
+                try {
+                    let userData;
+                    // Если это свой профиль - используем state.currentUser с актуальным статусом
+                    if (userId === state.currentUser.id) {
+                        userData = state.currentUser;
+                    } else {
+                        userData = await API.getUserProfile(userId);
+                    }
+                    MiniProfile.show(userData, e);
+                } catch (error) {
+                    console.error('Error loading user data for mini-profile:', error);
+                }
+            });
+
+            avatar.addEventListener('mouseleave', () => {
+                MiniProfile.hide();
             });
         });
 
@@ -1320,10 +1661,10 @@ document.addEventListener('DOMContentLoaded', async function() {
         }
     }
 
-    // Настройки (пока не функциональная)
+    // Настройки приложения
     if (settingsIcon) {
         settingsIcon.addEventListener('click', () => {
-            Modal.alert('Настройки будут доступны позже', 'Настройки', 'info');
+            openAppSettings();
         });
     }
 
@@ -1727,52 +2068,64 @@ document.addEventListener('DOMContentLoaded', async function() {
     async function openSpaceSettings(space) {
         const isAdmin = space.admin_id === state.currentUser.id;
 
-        // Кнопки для всех пользователей
-        const commonButtons = `
-            <button class="space-action-btn" onclick="window.chatApp.showParticipants(${space.id})">
-                <span class="action-icon">👥</span>
-                <div class="action-text">
-                    <div class="action-title">Список участников</div>
-                    <div class="action-desc">Просмотр и управление</div>
-                </div>
-            </button>
-        `;
+        // Получаем разрешения текущего пользователя
+        const userPermissions = state.currentUserPermissions || [];
+        const canChangeInfo = isAdmin || userPermissions.includes('change_info');
+        const canAddMembers = isAdmin || userPermissions.includes('add_members');
 
-        // Кнопки только для админа
-        const adminButtons = `
-            <button class="space-action-btn" onclick="window.chatApp.renameSpace(${space.id})">
-                <span class="action-icon">✏️</span>
-                <div class="action-text">
-                    <div class="action-title">Изменить название</div>
-                    <div class="action-desc">Переименовать пространство</div>
-                </div>
-            </button>
-            <button class="space-action-btn" onclick="window.chatApp.addUserToSpace(${space.id})">
-                <span class="action-icon">👤</span>
-                <div class="action-text">
-                    <div class="action-title">Добавить пользователя</div>
-                    <div class="action-desc">Пригласить по нику или ID</div>
-                </div>
-            </button>
-            <button class="space-action-btn space-action-danger" onclick="window.chatApp.deleteSpace(${space.id})">
-                <span class="action-icon">🗑️</span>
-                <div class="action-text">
-                    <div class="action-title">Удалить пространство</div>
-                    <div class="action-desc">Удалить навсегда со всеми сообщениями</div>
-                </div>
-            </button>
-        `;
+        let buttons = '';
 
-        // Кнопка для обычных участников
-        const userButtons = `
-            <button class="space-action-btn space-action-warning" onclick="window.chatApp.leaveSpace(${space.id})">
-                <span class="action-icon">🚪</span>
-                <div class="action-text">
-                    <div class="action-title">Покинуть пространство</div>
-                    <div class="action-desc">Выйти из этой комнаты</div>
-                </div>
-            </button>
-        `;
+        // Кнопка настроек чата (для владельца - полный доступ, для других - только название)
+        if (canChangeInfo) {
+            buttons += `
+                <button class="space-action-btn" onclick="window.chatApp.openChatSettings(${space.id}, ${isAdmin})">
+                    <span class="action-icon">⚙️</span>
+                    <div class="action-text">
+                        <div class="action-title">Настройки чата</div>
+                        <div class="action-desc">${isAdmin ? 'Название, описание, аватар' : 'Изменить название'}</div>
+                    </div>
+                </button>
+            `;
+        }
+
+        // Кнопка приглашения пользователей
+        if (canAddMembers) {
+            buttons += `
+                <button class="space-action-btn" onclick="window.chatApp.addUserToSpace(${space.id})">
+                    <span class="action-icon">👤</span>
+                    <div class="action-text">
+                        <div class="action-title">Пригласить пользователя</div>
+                        <div class="action-desc">Добавить по нику или ID</div>
+                    </div>
+                </button>
+            `;
+        }
+
+        // Кнопка удаления пространства (только для владельца)
+        if (isAdmin) {
+            buttons += `
+                <button class="space-action-btn space-action-danger" onclick="window.chatApp.deleteSpace(${space.id})">
+                    <span class="action-icon">🗑️</span>
+                    <div class="action-text">
+                        <div class="action-title">Удалить пространство</div>
+                        <div class="action-desc">Удалить навсегда со всеми сообщениями</div>
+                    </div>
+                </button>
+            `;
+        }
+
+        // Кнопка выхода из пространства (для всех кроме владельца)
+        if (!isAdmin) {
+            buttons += `
+                <button class="space-action-btn space-action-warning" onclick="window.chatApp.leaveSpace(${space.id})">
+                    <span class="action-icon">🚪</span>
+                    <div class="action-text">
+                        <div class="action-title">Покинуть пространство</div>
+                        <div class="action-desc">Выйти из этой комнаты</div>
+                    </div>
+                </button>
+            `;
+        }
 
         const content = `
             <div class="space-settings-menu">
@@ -1781,13 +2134,47 @@ document.addEventListener('DOMContentLoaded', async function() {
                     <h3>${space.name}</h3>
                 </div>
                 <div class="space-settings-actions">
-                    ${commonButtons}
-                    ${isAdmin ? adminButtons : userButtons}
+                    ${buttons}
                 </div>
             </div>
         `;
 
         await Modal.custom(content);
+    }
+
+    async function openChatSettings(spaceId, isOwner) {
+        const currentSpace = state.spaces.find(s => s.id === spaceId);
+        if (!currentSpace) return;
+
+        // Для владельца - полная форма, для других - только название
+        const formData = await Modal.chatSettings({
+            name: currentSpace.name,
+            description: currentSpace.description || '',
+            avatarUrl: currentSpace.avatar_url,
+            isOwner: isOwner
+        });
+
+        if (!formData) return; // Пользователь отменил
+
+        try {
+            // Обновляем название и описание
+            if (formData.name !== currentSpace.name || (isOwner && formData.description !== currentSpace.description)) {
+                await API.updateSpaceInfo(spaceId, {
+                    name: formData.name,
+                    description: formData.description
+                });
+            }
+
+            // Загружаем новый аватар если он был выбран
+            if (formData.avatarFile && isOwner) {
+                await API.uploadSpaceAvatar(spaceId, formData.avatarFile);
+            }
+
+            await Modal.success('Настройки обновлены!');
+            await loadSpaces();
+        } catch (error) {
+            await Modal.error('Ошибка: ' + error.message);
+        }
     }
 
     async function renameSpace(spaceId) {
@@ -1934,21 +2321,26 @@ document.addEventListener('DOMContentLoaded', async function() {
             card.addEventListener('contextmenu', async (e) => {
                 e.preventDefault();
 
-                // Получаем права текущего пользователя
-                const permissions = await API.getMyPermissions(spaceId);
-                const canKick = permissions.is_admin || permissions.permissions.includes('kick_members');
-                const canBan = permissions.is_admin || permissions.permissions.includes('ban_members');
-                const canManageRoles = permissions.is_admin || permissions.permissions.includes('manage_roles');
+                // ОПТИМИЗАЦИЯ: Используем кешированные данные вместо новых запросов
+                const space = state.spaces.find(s => s.id === spaceId);
+                const isAdmin = space && space.admin_id === state.currentUser.id;
+                
+                // Используем уже загруженные permissions из state
+                const userPermissions = state.currentUserPermissions || [];
+                const canKick = isAdmin || userPermissions.includes('kick_members');
+                const canBan = isAdmin || userPermissions.includes('ban_members');
+                const canManageRoles = isAdmin || userPermissions.includes('manage_roles');
 
                 if (!canKick && !canBan && !canManageRoles) return;
 
-                // Получаем роль целевого пользователя
-                const participantsData = await API.getSpaceParticipants(spaceId);
-                const targetUser = participantsData.participants.find(p => p.id === userId);
+                // ОПТИМИЗАЦИЯ: Используем кешированных участников
+                const cachedParticipants = state.cache.participants || [];
+                const targetUser = cachedParticipants.find(p => p.id === userId);
                 const targetUserRole = targetUser?.role?.name || 'Участник';
 
-                // Определяем текущую роль (из permissions)
-                const currentUserRole = permissions.role?.name || 'Участник';
+                // Определяем текущую роль пользователя
+                const currentParticipant = cachedParticipants.find(p => p.id === state.currentUser.id);
+                const currentUserRole = isAdmin ? 'Владелец' : (currentParticipant?.role?.name || 'Участник');
 
                 // Иерархия ролей
                 const roleHierarchy = {
@@ -1959,14 +2351,14 @@ document.addEventListener('DOMContentLoaded', async function() {
 
                 const currentLevel = roleHierarchy[currentUserRole] || 0;
                 const targetLevel = roleHierarchy[targetUserRole] || 0;
-                const canModerate = permissions.is_admin || currentLevel > targetLevel;
+                const canModerate = isAdmin || currentLevel > targetLevel;
 
-                // Получаем список ролей для назначения
-                const allRoles = await API.getSpaceRoles(spaceId);
+                // ОПТИМИЗАЦИЯ: Используем кешированные роли
+                const allRoles = state.cache.roles || [];
                 // Фильтруем роли: исключаем "Владелец" и роли >= текущей роли модератора
                 const roles = allRoles.filter(r => {
                     if (r.name === 'Владелец') return false;
-                    if (permissions.is_admin) return true; // Владелец видит все роли кроме "Владелец"
+                    if (isAdmin) return true; // Владелец видит все роли кроме "Владелец"
                     const roleLevel = roleHierarchy[r.name] || 0;
                     return roleLevel < currentLevel; // Модератор видит только роли ниже своей
                 });
@@ -2062,16 +2454,12 @@ document.addEventListener('DOMContentLoaded', async function() {
         }
 
         try {
-            // Проверяем права текущего пользователя
+            // ОПТИМИЗАЦИЯ: Используем кешированные данные вместо запросов
             const isAdmin = state.currentSpace.admin_id === state.currentUser.id;
             console.log('isAdmin:', isAdmin);
 
-            // Получаем разрешения через API
-            const permissions = await API.getMyPermissions(spaceId).catch((err) => {
-                console.error('Error getting permissions:', err);
-                return { permissions: [] };
-            });
-            const userPermissions = permissions.permissions || [];
+            // Используем уже загруженные permissions из state
+            const userPermissions = state.currentUserPermissions || [];
             console.log('userPermissions:', userPermissions);
 
             const canManageRoles = isAdmin || userPermissions.includes('promote_members');
@@ -2086,24 +2474,9 @@ document.addEventListener('DOMContentLoaded', async function() {
                 return;
             }
 
-            // Получаем информацию о целевом пользователе
-            const participantsData = await API.getSpaceParticipants(spaceId);
-            const targetUser = participantsData.participants.find(p => p.id === user.id);
-
-            // Проверяем, является ли целевой пользователь "неприкасаемым"
-            // Получаем разрешения целевого пользователя
-            let targetUserPermissions = [];
-            if (targetUser && targetUser.role) {
-                // Нужно получить разрешения роли целевого пользователя
-                // Пока проверим через API (можно оптимизировать)
-                try {
-                    const targetPerms = await API.getMyPermissions(spaceId);
-                    // TODO: здесь нужен endpoint для получения разрешений другого пользователя
-                    // Пока будем считать что у targetUser есть поле permissions
-                } catch (e) {
-                    console.error('Error getting target user permissions:', e);
-                }
-            }
+            // ОПТИМИЗАЦИЯ: Используем кешированных участников
+            const cachedParticipants = state.cache.participants || [];
+            const targetUser = cachedParticipants.find(p => p.id === user.id);
 
             // Если пользователь неприкасаемый и текущий пользователь не владелец - не показываем меню
             const isTargetUntouchable = targetUser && targetUser.role && targetUser.role.permissions && targetUser.role.permissions.includes('untouchable');
@@ -2327,6 +2700,8 @@ document.addEventListener('DOMContentLoaded', async function() {
                 reason: reason || null,
                 until: until ? until.toISOString() : null
             });
+            // ОПТИМИЗАЦИЯ: Инвалидируем кеш перед обновлением
+            invalidateCache();
             await Modal.success('Пользователь забанен!');
             await refreshParticipantsList(spaceId);
             // Обновляем правую панель
@@ -2346,6 +2721,8 @@ document.addEventListener('DOMContentLoaded', async function() {
 
         try {
             await API.unbanUser(spaceId, userId);
+            // ОПТИМИЗАЦИЯ: Инвалидируем кеш перед обновлением
+            invalidateCache();
             await Modal.success('Пользователь разбанен!');
             await refreshParticipantsList(spaceId);
             // Обновляем правую панель
@@ -2366,6 +2743,9 @@ document.addEventListener('DOMContentLoaded', async function() {
         try {
             await API.kickUser(spaceId, userId);
 
+            // ОПТИМИЗАЦИЯ: Инвалидируем кеш перед обновлением
+            invalidateCache();
+            
             // Обновляем список участников без закрытия окна
             await refreshParticipantsList(spaceId);
             // Обновляем правую панель
@@ -3501,11 +3881,399 @@ document.addEventListener('DOMContentLoaded', async function() {
         }
     }
 
+    // === НАСТРОЙКИ ПРИЛОЖЕНИЯ ===
+
+    function loadPersonalizationSettings() {
+        // Загружаем тему
+        const theme = localStorage.getItem('theme') || 'light';
+        applyTheme(theme);
+
+        // Загружаем цветовую схему
+        const colorScheme = localStorage.getItem('colorScheme') || 'maroon';
+        applyColorScheme(colorScheme);
+
+        // Загружаем размер шрифта
+        const fontSize = localStorage.getItem('fontSize') || 'medium';
+        applyFontSize(fontSize);
+    }
+
+    function openAppSettings(initialTab = 'account') {
+        const content = `
+            <div class="app-settings-view">
+                <div class="settings-header">
+                    <h2>Настройки</h2>
+                </div>
+                <div class="settings-container">
+                    <div class="settings-tabs">
+                        <button class="settings-tab ${initialTab === 'account' ? 'active' : ''}" data-tab="account">
+                            <div class="tab-icon">👤</div>
+                            <div class="tab-content">
+                                <div class="tab-label">Аккаунт</div>
+                                <div class="tab-desc">Никнейм, email, пароль</div>
+                            </div>
+                        </button>
+                        <button class="settings-tab ${initialTab === 'personalization' ? 'active' : ''}" data-tab="personalization">
+                            <div class="tab-icon">🎨</div>
+                            <div class="tab-content">
+                                <div class="tab-label">Персонализация</div>
+                                <div class="tab-desc">Цвета и оформление</div>
+                            </div>
+                        </button>
+                        <button class="settings-tab ${initialTab === 'profile' ? 'active' : ''}" data-tab="profile">
+                            <div class="tab-icon">🖼️</div>
+                            <div class="tab-content">
+                                <div class="tab-label">Мини-профиль</div>
+                                <div class="tab-desc">Скоро будет доступно</div>
+                            </div>
+                        </button>
+                    </div>
+                    <div class="settings-content" id="settings-content">
+                        ${renderSettingsTab(initialTab)}
+                    </div>
+                </div>
+            </div>
+        `;
+
+        chatMainElement.innerHTML = content;
+
+        // Добавляем обработчики переключения вкладок
+        const tabs = document.querySelectorAll('.settings-tab');
+        tabs.forEach(tab => {
+            tab.addEventListener('click', () => {
+                const tabName = tab.dataset.tab;
+
+                // Обновляем активную вкладку
+                tabs.forEach(t => t.classList.remove('active'));
+                tab.classList.add('active');
+
+                // Обновляем контент
+                document.getElementById('settings-content').innerHTML = renderSettingsTab(tabName);
+
+                // Добавляем обработчики для новой вкладки
+                attachSettingsHandlers(tabName);
+            });
+        });
+
+        // Добавляем обработчики для начальной вкладки
+        attachSettingsHandlers(initialTab);
+    }
+
+    function renderSettingsTab(tabName) {
+        switch (tabName) {
+            case 'account':
+                return renderAccountSettings();
+            case 'personalization':
+                return renderPersonalizationSettings();
+            case 'profile':
+                return renderProfileSettings();
+            default:
+                return '<p>Неизвестная вкладка</p>';
+        }
+    }
+
+    function renderAccountSettings() {
+        const user = state.currentUser;
+        return `
+            <div class="settings-section">
+                <h3>Информация об аккаунте</h3>
+
+                <div class="settings-item">
+                    <label class="settings-label">Никнейм</label>
+                    <div class="settings-input-group">
+                        <input type="text" id="nickname-input" class="settings-input" value="${user.nickname}" placeholder="Ваш никнейм"/>
+                        <button class="settings-btn settings-btn-primary" id="update-nickname-btn">Изменить</button>
+                    </div>
+                    <p class="settings-hint">@-тег изменится автоматически</p>
+                </div>
+
+                <div class="settings-item">
+                    <label class="settings-label">Email</label>
+                    <div class="settings-input-group">
+                        <input type="email" id="email-input" class="settings-input" value="${user.email || ''}" placeholder="email@example.com"/>
+                        <button class="settings-btn settings-btn-primary" id="update-email-btn">Изменить</button>
+                    </div>
+                    <p class="settings-hint">${user.email ? 'Привязанная почта' : 'Привяжите email для восстановления доступа'}</p>
+                </div>
+
+                <div class="settings-item">
+                    <label class="settings-label">Сменить пароль</label>
+                    <div class="settings-password-group">
+                        <input type="password" id="old-password-input" class="settings-input" placeholder="Текущий пароль"/>
+                        <input type="password" id="new-password-input" class="settings-input" placeholder="Новый пароль"/>
+                        <input type="password" id="confirm-password-input" class="settings-input" placeholder="Подтвердите новый пароль"/>
+                        <button class="settings-btn settings-btn-primary" id="update-password-btn">Сменить пароль</button>
+                    </div>
+                </div>
+            </div>
+        `;
+    }
+
+    function renderPersonalizationSettings() {
+        const currentScheme = localStorage.getItem('colorScheme') || 'maroon';
+        const currentTheme = localStorage.getItem('theme') || 'light';
+        const currentFontSize = localStorage.getItem('fontSize') || 'medium';
+
+        return `
+            <div class="settings-section">
+                <h3>Персонализация интерфейса</h3>
+                <p class="settings-description">Настройте внешний вид приложения под себя. Изменения видны только вам.</p>
+
+                <div class="settings-item">
+                    <label class="settings-label">Тема оформления</label>
+                    <div class="theme-toggle">
+                        <button class="theme-btn ${currentTheme === 'light' ? 'active' : ''}" data-theme="light">
+                            <span class="theme-icon">☀️</span>
+                            <span>Светлая</span>
+                        </button>
+                        <button class="theme-btn ${currentTheme === 'dark' ? 'active' : ''}" data-theme="dark">
+                            <span class="theme-icon">🌙</span>
+                            <span>Темная</span>
+                        </button>
+                    </div>
+                </div>
+
+                <div class="settings-item">
+                    <label class="settings-label">Цветовая схема</label>
+                    <p class="settings-hint">Выберите цвет для боковых панелей и акцентов</p>
+                    <div class="color-scheme-grid">
+                        <button class="color-scheme-option ${currentScheme === 'maroon' ? 'active' : ''}" data-scheme="maroon">
+                            <div class="scheme-preview" style="background: linear-gradient(135deg, #a52a2a 0%, #8B0000 100%);"></div>
+                            <span>Бордовая</span>
+                        </button>
+                        <button class="color-scheme-option ${currentScheme === 'blue' ? 'active' : ''}" data-scheme="blue">
+                            <div class="scheme-preview" style="background: linear-gradient(135deg, #2196F3 0%, #1565C0 100%);"></div>
+                            <span>Синяя</span>
+                        </button>
+                        <button class="color-scheme-option ${currentScheme === 'green' ? 'active' : ''}" data-scheme="green">
+                            <div class="scheme-preview" style="background: linear-gradient(135deg, #4CAF50 0%, #2E7D32 100%);"></div>
+                            <span>Зеленая</span>
+                        </button>
+                        <button class="color-scheme-option ${currentScheme === 'purple' ? 'active' : ''}" data-scheme="purple">
+                            <div class="scheme-preview" style="background: linear-gradient(135deg, #9C27B0 0%, #6A1B9A 100%);"></div>
+                            <span>Фиолетовая</span>
+                        </button>
+                        <button class="color-scheme-option ${currentScheme === 'orange' ? 'active' : ''}" data-scheme="orange">
+                            <div class="scheme-preview" style="background: linear-gradient(135deg, #FF9800 0%, #E65100 100%);"></div>
+                            <span>Оранжевая</span>
+                        </button>
+                        <button class="color-scheme-option ${currentScheme === 'teal' ? 'active' : ''}" data-scheme="teal">
+                            <div class="scheme-preview" style="background: linear-gradient(135deg, #009688 0%, #00695C 100%);"></div>
+                            <span>Бирюзовая</span>
+                        </button>
+                    </div>
+                </div>
+
+                <div class="settings-item">
+                    <label class="settings-label">Размер шрифта</label>
+                    <div class="font-size-options">
+                        <button class="font-size-btn ${currentFontSize === 'small' ? 'active' : ''}" data-size="small">Маленький</button>
+                        <button class="font-size-btn ${currentFontSize === 'medium' ? 'active' : ''}" data-size="medium">Средний</button>
+                        <button class="font-size-btn ${currentFontSize === 'large' ? 'active' : ''}" data-size="large">Большой</button>
+                    </div>
+                </div>
+
+                <div class="settings-item">
+                    <button class="settings-btn settings-btn-secondary" id="reset-personalization-btn">Сбросить настройки</button>
+                </div>
+            </div>
+        `;
+    }
+
+    function renderProfileSettings() {
+        return `
+            <div class="settings-section">
+                <h3>Мини-профиль</h3>
+                <p class="settings-description">Эта функция будет доступна в следующих обновлениях.</p>
+
+                <div class="settings-placeholder">
+                    <div class="placeholder-icon">🚧</div>
+                    <p>Здесь вы сможете настроить свой мини-профиль:</p>
+                    <ul style="text-align: left; display: inline-block; margin-top: 12px;">
+                        <li>Выбрать фон профиля</li>
+                        <li>Настроить рамку аватара</li>
+                        <li>Добавить статус</li>
+                    </ul>
+                </div>
+            </div>
+        `;
+    }
+
+    function attachSettingsHandlers(tabName) {
+        if (tabName === 'account') {
+            // Обработчик изменения никнейма
+            const updateNicknameBtn = document.getElementById('update-nickname-btn');
+            if (updateNicknameBtn) {
+                updateNicknameBtn.addEventListener('click', async () => {
+                    const newNickname = document.getElementById('nickname-input').value.trim();
+                    if (!newNickname) {
+                        await Modal.error('Введите никнейм');
+                        return;
+                    }
+
+                    try {
+                        const updatedUser = await API.updateNickname(newNickname);
+                        state.currentUser = updatedUser;
+                        await Modal.success('Никнейм обновлен!');
+                    } catch (error) {
+                        await Modal.error('Ошибка: ' + error.message);
+                    }
+                });
+            }
+
+            // Обработчик изменения email
+            const updateEmailBtn = document.getElementById('update-email-btn');
+            if (updateEmailBtn) {
+                updateEmailBtn.addEventListener('click', async () => {
+                    const newEmail = document.getElementById('email-input').value.trim();
+                    if (!newEmail) {
+                        await Modal.error('Введите email');
+                        return;
+                    }
+
+                    try {
+                        const updatedUser = await API.updateEmail(newEmail);
+                        state.currentUser = updatedUser;
+                        await Modal.success('Email обновлен!');
+                    } catch (error) {
+                        await Modal.error('Ошибка: ' + error.message);
+                    }
+                });
+            }
+
+            // Обработчик смены пароля
+            const updatePasswordBtn = document.getElementById('update-password-btn');
+            if (updatePasswordBtn) {
+                updatePasswordBtn.addEventListener('click', async () => {
+                    const oldPassword = document.getElementById('old-password-input').value;
+                    const newPassword = document.getElementById('new-password-input').value;
+                    const confirmPassword = document.getElementById('confirm-password-input').value;
+
+                    if (!oldPassword || !newPassword || !confirmPassword) {
+                        await Modal.error('Заполните все поля');
+                        return;
+                    }
+
+                    if (newPassword !== confirmPassword) {
+                        await Modal.error('Новые пароли не совпадают');
+                        return;
+                    }
+
+                    if (newPassword.length < 6) {
+                        await Modal.error('Пароль должен быть не менее 6 символов');
+                        return;
+                    }
+
+                    try {
+                        await API.changePassword(oldPassword, newPassword);
+                        await Modal.success('Пароль изменен!');
+                        document.getElementById('old-password-input').value = '';
+                        document.getElementById('new-password-input').value = '';
+                        document.getElementById('confirm-password-input').value = '';
+                    } catch (error) {
+                        await Modal.error('Ошибка: ' + error.message);
+                    }
+                });
+            }
+        } else if (tabName === 'personalization') {
+            // Обработчики темы
+            const themeBtns = document.querySelectorAll('.theme-btn');
+            themeBtns.forEach(btn => {
+                btn.addEventListener('click', () => {
+                    const theme = btn.dataset.theme;
+                    applyTheme(theme);
+                    themeBtns.forEach(b => b.classList.remove('active'));
+                    btn.classList.add('active');
+                });
+            });
+
+            // Обработчики цветовых схем
+            const colorSchemeOptions = document.querySelectorAll('.color-scheme-option');
+            colorSchemeOptions.forEach(option => {
+                option.addEventListener('click', () => {
+                    const scheme = option.dataset.scheme;
+                    applyColorScheme(scheme);
+                    colorSchemeOptions.forEach(o => o.classList.remove('active'));
+                    option.classList.add('active');
+                });
+            });
+
+            // Обработчики размера шрифта
+            const fontSizeBtns = document.querySelectorAll('.font-size-btn');
+            fontSizeBtns.forEach(btn => {
+                btn.addEventListener('click', () => {
+                    const size = btn.dataset.size;
+                    applyFontSize(size);
+                    fontSizeBtns.forEach(b => b.classList.remove('active'));
+                    btn.classList.add('active');
+                });
+            });
+
+            // Сброс настроек
+            const resetBtn = document.getElementById('reset-personalization-btn');
+            if (resetBtn) {
+                resetBtn.addEventListener('click', async () => {
+                    const confirmed = await Modal.confirm('Сбросить все настройки персонализации?');
+                    if (confirmed) {
+                        resetPersonalization();
+                        // Перезагружаем вкладку персонализации
+                        document.getElementById('settings-content').innerHTML = renderPersonalizationSettings();
+                        attachSettingsHandlers('personalization');
+                        await Modal.success('Настройки сброшены');
+                    }
+                });
+            }
+        }
+    }
+
+    function applyTheme(theme) {
+        localStorage.setItem('theme', theme);
+        document.body.setAttribute('data-theme', theme);
+    }
+
+    function applyColorScheme(scheme) {
+        localStorage.setItem('colorScheme', scheme);
+        document.body.setAttribute('data-color-scheme', scheme);
+    }
+
+    function applyFontSize(size) {
+        localStorage.setItem('fontSize', size);
+        document.body.setAttribute('data-font-size', size);
+    }
+
+    function resetPersonalization() {
+        localStorage.removeItem('colorScheme');
+        localStorage.removeItem('fontSize');
+        localStorage.removeItem('theme');
+        document.body.removeAttribute('data-theme');
+        document.body.removeAttribute('data-color-scheme');
+        document.body.removeAttribute('data-font-size');
+
+        // Применяем дефолтные значения
+        applyTheme('light');
+        applyColorScheme('maroon');
+        applyFontSize('medium');
+    }
+
     // Показать панель уведомлений
     async function showNotifications() {
         try {
-            const result = await API.getNotifications(false, 50);
-            const notifications = Array.isArray(result) ? result : (result.notifications || []);
+            // ОПТИМИЗАЦИЯ: Используем кеш если он свежий (менее 30 секунд)
+            const now = Date.now();
+            const cacheAge = now - state.cache.notificationsTimestamp;
+            const NOTIFICATIONS_CACHE_TTL = 30000; // 30 секунд
+            
+            let notifications;
+            if (state.cache.notifications && cacheAge < NOTIFICATIONS_CACHE_TTL) {
+                // Используем кеш
+                notifications = state.cache.notifications;
+            } else {
+                // Загружаем свежие уведомления
+                const result = await API.getNotifications(false, 50);
+                notifications = Array.isArray(result) ? result : (result.notifications || []);
+                // Обновляем кеш
+                state.cache.notifications = notifications;
+                state.cache.notificationsTimestamp = now;
+            }
 
             // Формируем HTML для уведомлений
             const notificationsHTML = notifications.length > 0
@@ -3542,6 +4310,7 @@ document.addEventListener('DOMContentLoaded', async function() {
                     markAllReadBtn.addEventListener('click', async () => {
                         try {
                             await API.markAllNotificationsAsRead();
+                            invalidateNotificationsCache(); // Инвалидируем кеш
                             await showNotifications(); // Обновляем список
                             await updateNotificationBadge();
                         } catch (error) {
@@ -3624,6 +4393,7 @@ document.addEventListener('DOMContentLoaded', async function() {
             // Пометить как прочитанное
             if (!notification.is_read) {
                 await API.markNotificationAsRead(notification.id);
+                invalidateNotificationsCache(); // Инвалидируем кеш
                 await updateNotificationBadge();
             }
 
@@ -3914,6 +4684,7 @@ document.addEventListener('DOMContentLoaded', async function() {
     // Экспортируем функции в window для доступа из HTML
     window.chatApp = {
         renameSpace,
+        openChatSettings,
         addUserToSpace,
         showParticipants,
         kickUserFromSpace,

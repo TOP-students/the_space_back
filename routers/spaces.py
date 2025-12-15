@@ -66,12 +66,12 @@ async def get_all_spaces(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """Получить список комнат, где пользователь является активным участником"""
+    """Получить список комнат, где пользователь является активным участником (оптимизировано)"""
     from models.base import Chat, ChatParticipant
 
-    # Получаем только те пространства, где пользователь - активный участник
-    spaces = db.query(Space).join(
-        Chat, Space.id == Chat.space_id
+    # ОПТИМИЗАЦИЯ: Один запрос для получения spaces и chat_id одновременно
+    results = db.query(Space, Chat.id.label('chat_id')).join(
+        Chat, (Space.id == Chat.space_id) & (Chat.type == "group")
     ).join(
         ChatParticipant, Chat.id == ChatParticipant.chat_id
     ).filter(
@@ -79,24 +79,14 @@ async def get_all_spaces(
         ChatParticipant.is_active == True
     ).all()
 
-    # Добавляем chat_id для каждой комнаты
-    result = []
-    for space in spaces:
-        chat = db.query(Chat).filter(
-            Chat.space_id == space.id,
-            Chat.type == "group"
-        ).first()
-
-        result.append({
-            "id": space.id,
-            "name": space.name,
-            "description": space.description,
-            "admin_id": space.admin_id,
-            "chat_id": chat.id if chat else None,
-            "avatar_url": space.avatar_url
-        })
-
-    return result
+    return [{
+        "id": space.id,
+        "name": space.name,
+        "description": space.description,
+        "admin_id": space.admin_id,
+        "chat_id": chat_id,
+        "avatar_url": space.avatar_url
+    } for space, chat_id in results]
 
 @router.get("/{space_id}", response_model=SpaceOut)
 async def get_space(
@@ -138,56 +128,69 @@ async def get_participants(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Получить участников комнаты"""
-    from models.base import UserRole, Role, Ban
+    """Получить участников комнаты (оптимизировано)"""
+    from models.base import UserRole, Role, Ban, Chat, ChatParticipant
+    from sqlalchemy.orm import joinedload
 
-    space_repo = SpaceRepository(db)
-    participants = space_repo.get_participants(space_id)
+    # Получаем чат пространства
+    chat = db.query(Chat).filter(Chat.space_id == space_id).first()
+    if not chat:
+        return {"space_id": space_id, "participants": []}
 
-    # Получаем роли и баны для всех участников
+    # ОПТИМИЗАЦИЯ: Один запрос для всех участников с их ролями
+    # Сначала получаем подзапрос для ролей только этого пространства
+    from sqlalchemy import and_
+    
+    participants_with_roles = db.query(
+        User,
+        Role
+    ).select_from(ChatParticipant).join(
+        User, ChatParticipant.user_id == User.id
+    ).outerjoin(
+        UserRole, and_(
+            UserRole.user_id == User.id,
+            UserRole.role_id.in_(
+                db.query(Role.id).filter(Role.space_id == space_id)
+            )
+        )
+    ).outerjoin(
+        Role, Role.id == UserRole.role_id
+    ).filter(
+        ChatParticipant.chat_id == chat.id,
+        ChatParticipant.is_active == True
+    ).all()
+
+    # ОПТИМИЗАЦИЯ: Один запрос для всех банов
+    user_ids = [user.id for user, _ in participants_with_roles]
+    now = datetime.now(timezone.utc)
+    
+    # Фильтруем активные баны (until is None или until > now)
+    banned_user_ids = set()
+    bans = db.query(Ban).filter(
+        Ban.user_id.in_(user_ids),
+        Ban.space_id == space_id
+    ).all()
+    
+    for ban in bans:
+        if ban.until is None:
+            banned_user_ids.add(ban.user_id)
+        else:
+            ban_until = ban.until if ban.until.tzinfo else ban.until.replace(tzinfo=timezone.utc)
+            if ban_until > now:
+                banned_user_ids.add(ban.user_id)
+
+    # Формируем результат
     result_participants = []
-    for user in participants:
-        # Получаем роль пользователя через join
-        role = db.query(Role).join(UserRole).filter(
-            UserRole.user_id == user.id,
-            Role.space_id == space_id
-        ).first()
-
+    for user, role in participants_with_roles:
         role_info = None
-        role_permissions = []
         if role:
-            # Получаем разрешения роли
-            role_repo = RoleRepository(db)
-            role_permissions = role_repo.get_permissions(user.id, space_id)
-
             role_info = {
                 "id": role.id,
                 "name": role.name,
                 "color": role.color,
                 "priority": role.priority,
-                "permissions": role_permissions
+                "permissions": role.permissions or []
             }
-
-        # Проверяем бан
-        is_banned = False
-        try:
-            ban = db.query(Ban).filter(
-                Ban.user_id == user.id,
-                Ban.space_id == space_id
-            ).first()
-            if ban:
-                # Если until is None - перманентный бан
-                # Если until в будущем - временный бан ещё активен
-                if ban.until is None:
-                    is_banned = True
-                else:
-                    # Приводим оба времени к UTC для сравнения
-                    now = datetime.now(timezone.utc)
-                    ban_until = ban.until if ban.until.tzinfo else ban.until.replace(tzinfo=timezone.utc)
-                    is_banned = ban_until > now
-        except Exception as e:
-            print(f"Error checking ban: {e}")
-            is_banned = False
 
         result_participants.append({
             "id": user.id,
@@ -196,7 +199,7 @@ async def get_participants(
             "status": user.status,
             "avatar_url": user.avatar_url,
             "role": role_info,
-            "is_banned": is_banned
+            "is_banned": user.id in banned_user_ids
         })
 
     return {
@@ -539,26 +542,42 @@ async def add_user_to_space(
 async def update_space_name(
     space_id: int,
     new_name: str,
+    new_description: str = None,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Изменить название пространства"""
+    """Изменить название и описание пространства"""
     space_repo = SpaceRepository(db)
+    role_repo = RoleRepository(db)
 
-    # Проверка прав - только админ может изменять название
+    # Получаем пространство
     space = space_repo.get_by_id(space_id)
-    if not space or space.admin_id != current_user.id:
-        raise HTTPException(status_code=403, detail="У вас нет прав на изменение названия")
+    if not space:
+        raise HTTPException(status_code=404, detail="Пространство не найдено")
+
+    # Проверка прав - владелец или пользователь с разрешением change_info
+    is_admin = space.admin_id == current_user.id
+    user_role = role_repo.get_user_role_in_space(current_user.id, space_id)
+    has_permission = user_role and user_role.permissions and 'change_info' in user_role.permissions
+
+    if not is_admin and not has_permission:
+        raise HTTPException(status_code=403, detail="У вас нет прав на изменение информации")
 
     # Обновляем название
     space.name = new_name
+
+    # Обновляем описание (только если передано и пользователь - владелец)
+    if new_description is not None and is_admin:
+        space.description = new_description
+
     db.commit()
 
     return {
-        "message": "Название пространства обновлено",
+        "message": "Информация обновлена",
         "space": {
             "id": space.id,
-            "name": space.name
+            "name": space.name,
+            "description": space.description
         }
     }
 

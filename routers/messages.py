@@ -177,7 +177,7 @@ def get_messages(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Получить сообщения из чата"""
+    """Получить сообщения из чата (оптимизировано)"""
     message_repo = MessageRepository(db)
     reaction_repo = ReactionRepository(db)
 
@@ -193,10 +193,14 @@ def get_messages(
 
     messages = message_repo.get_by_chat(chat_id, limit, offset)
 
-    # Добавляем реакции к каждому сообщению
+    # ОПТИМИЗАЦИЯ: Получаем все реакции одним запросом
+    message_ids = [msg.id for msg in messages]
+    all_reactions, my_reactions = reaction_repo.get_reactions_for_messages(message_ids, current_user.id)
+
+    # Добавляем реакции к сообщениям
     for msg in messages:
-        msg.reactions = reaction_repo.get_message_reactions(msg.id)
-        msg.my_reaction = reaction_repo.get_user_reaction(msg.id, current_user.id)
+        msg.reactions = all_reactions.get(msg.id, [])
+        msg.my_reaction = my_reactions.get(msg.id)
 
     return messages
 

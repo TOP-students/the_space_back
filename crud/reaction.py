@@ -87,3 +87,50 @@ class ReactionRepository:
         ).first()
         
         return reaction.reaction if reaction else None
+
+    def get_reactions_for_messages(self, message_ids: list, current_user_id: int):
+        """ОПТИМИЗАЦИЯ: Получить реакции для нескольких сообщений одним запросом"""
+        if not message_ids:
+            return {}, {}
+        
+        # Получаем все реакции для всех сообщений одним запросом
+        all_reactions = self.db.query(Reaction, User).join(
+            User, Reaction.user_id == User.id
+        ).filter(
+            Reaction.message_id.in_(message_ids)
+        ).all()
+        
+        # Группируем реакции по message_id
+        reactions_by_message = {}
+        my_reactions = {}
+        
+        for reaction, user in all_reactions:
+            msg_id = reaction.message_id
+            
+            if msg_id not in reactions_by_message:
+                reactions_by_message[msg_id] = {}
+            
+            reaction_emoji = reaction.reaction
+            if reaction_emoji not in reactions_by_message[msg_id]:
+                reactions_by_message[msg_id][reaction_emoji] = {
+                    "reaction": reaction_emoji,
+                    "count": 0,
+                    "users": []
+                }
+            
+            reactions_by_message[msg_id][reaction_emoji]["count"] += 1
+            reactions_by_message[msg_id][reaction_emoji]["users"].append({
+                "id": user.id,
+                "nickname": user.nickname
+            })
+            
+            # Запоминаем реакцию текущего пользователя
+            if user.id == current_user_id:
+                my_reactions[msg_id] = reaction_emoji
+        
+        # Преобразуем в нужный формат
+        result = {}
+        for msg_id, reactions_dict in reactions_by_message.items():
+            result[msg_id] = list(reactions_dict.values())
+        
+        return result, my_reactions
