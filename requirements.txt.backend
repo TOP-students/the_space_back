@@ -5,7 +5,7 @@ pydantic==2.11.9
 
 # Database
 SQLAlchemy==2.0.43
-psycopg2-binary==2.9.9
+psycopg2-binary==2.9.10
 
 # Authentication & Security
 python-jose==3.5.0
